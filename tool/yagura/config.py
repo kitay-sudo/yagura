@@ -25,6 +25,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "watch": {
         "enabled": False,
         "interval_minutes": 5,
+        "heartbeat_hours": 12,  # 0 = выключено. По умолчанию 2 раза в сутки.
         "telegram": {
             "bot_token": "",
             "chat_id": "",

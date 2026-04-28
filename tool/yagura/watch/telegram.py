@@ -3,13 +3,35 @@
 from __future__ import annotations
 
 import socket
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 
 from yagura.watch.rules import Alert
 
 API_BASE = "https://api.telegram.org"
+
+
+def _now_msk() -> str:
+    """Format 'DD.MM.YYYY HH:MM:SS MSK' (Europe/Moscow), UTC fallback."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("Europe/Moscow")
+        return datetime.now(tz).strftime("%d.%m.%Y %H:%M:%S MSK")
+    except Exception:
+        return datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M:%S UTC")
+
+
+def _fmt_uptime(seconds: int) -> str:
+    days, rem = divmod(int(seconds), 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, _ = divmod(rem, 60)
+    if days:
+        return f"{days}d {hours}h {minutes}m"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
 
 
 def validate(bot_token: str) -> tuple[bool, str]:
@@ -33,11 +55,54 @@ def send_test(bot_token: str, chat_id: str) -> tuple[bool, str]:
     text = (
         f"🍵 YAGURA test message\n"
         f"Host: {socket.gethostname()}\n"
-        f"Time: {datetime.now().isoformat(timespec='seconds')}\n"
+        f"Time: {_now_msk()}\n"
         f"\n"
         f"Если ты это видишь — связь работает. Дальше в этот чат будут приходить алерты watchdog."
     )
     return send_message(bot_token, chat_id, text)
+
+
+def send_startup(
+    bot_token: str,
+    chat_id: str,
+    *,
+    version: str,
+    interval_min: int,
+    ai_provider: str,
+    baseline_listeners: int,
+    baseline_units: int,
+) -> tuple[bool, str]:
+    """One-shot message when yagura-watch.service starts."""
+    host = socket.gethostname()
+    ai_label = ai_provider if ai_provider and ai_provider != "none" else "off"
+    lines = [
+        f"🪴 YAGURA запущен — {host}",
+        f"├ Версия: v{version}",
+        f"├ Watch interval: {interval_min} мин",
+        f"├ AI: {ai_label}",
+        f"├ Baseline: {baseline_listeners} listeners · {baseline_units} systemd units",
+        f"└ Время: {_now_msk()}",
+    ]
+    return send_message(bot_token, chat_id, "\n".join(lines))
+
+
+def send_heartbeat(
+    bot_token: str,
+    chat_id: str,
+    *,
+    uptime_seconds: int,
+    ticks: int,
+    alerts_sent: int,
+) -> tuple[bool, str]:
+    """Periodic 'I'm alive' signal. Frequency controlled by watch.heartbeat_hours."""
+    host = socket.gethostname()
+    lines = [
+        f"🌿 YAGURA жив — {host}",
+        f"├ Uptime watch: {_fmt_uptime(uptime_seconds)}",
+        f"├ Тиков: {ticks} · Алертов: {alerts_sent}",
+        f"└ Время: {_now_msk()}",
+    ]
+    return send_message(bot_token, chat_id, "\n".join(lines))
 
 
 def send_message(bot_token: str, chat_id: str, text: str) -> tuple[bool, str]:

@@ -9,6 +9,7 @@ dist/
 .pytest_cache/
 .ruff_cache/
 docs/
+frontend/
 
 # Frontend
 frontend/node_modules/

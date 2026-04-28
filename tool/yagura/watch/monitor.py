@@ -7,6 +7,7 @@ import sys
 import time
 from pathlib import Path
 
+from yagura import __version__
 from yagura.ai.factory import build_client
 from yagura.ai.prompts import build_alert_prompt
 from yagura.config import LOG_DIR, ensure_dirs, get, load_config
@@ -45,6 +46,7 @@ def run_forever() -> None:
     cfg = load_config()
     interval_min = int(get(cfg, "watch.interval_minutes", DEFAULT_INTERVAL_MINUTES))
     interval_sec = max(60, interval_min * 60)
+    heartbeat_hours = int(get(cfg, "watch.heartbeat_hours", 12))
 
     baseline = baseline_mod.load()
     if baseline is None:
@@ -62,16 +64,56 @@ def run_forever() -> None:
     suppressed: dict[tuple[str, str], int] = {}
 
     logger.info(
-        f"interval: {interval_min}m, telegram: {'on' if bot_token else 'off'}, ai: {ai.name if ai else 'off'}"
+        f"interval: {interval_min}m, telegram: {'on' if bot_token else 'off'}, "
+        f"ai: {ai.name if ai else 'off'}, heartbeat: "
+        f"{'every ' + str(heartbeat_hours) + 'h' if heartbeat_hours > 0 else 'off'}"
     )
+
+    # Startup notification — лети сразу, чтобы оператор видел что сервис поднялся.
+    if bot_token and chat_id:
+        ok, msg = telegram.send_startup(
+            bot_token,
+            chat_id,
+            version=__version__,
+            interval_min=interval_min,
+            ai_provider=ai_provider,
+            baseline_listeners=len(baseline.get("listeners", []) or []),
+            baseline_units=len(baseline.get("systemd_units", []) or []),
+        )
+        if not ok:
+            logger.error(f"telegram startup failed: {msg}")
+
+    # Counters for heartbeat — отражают работу с момента старта сервиса.
+    started_at = time.time()
+    ticks = 0
+    alerts_sent = 0
+    last_heartbeat = started_at  # отсчёт интервала
 
     while True:
         tick_start = time.time()
         try:
             alerts = rules.evaluate(baseline, cfg)
-            _handle_alerts(alerts, cfg, bot_token, chat_id, ai, suppressed, logger)
+            sent = _handle_alerts(alerts, cfg, bot_token, chat_id, ai, suppressed, logger)
+            alerts_sent += sent
         except Exception as e:  # never let a transient error kill the daemon
             logger.exception(f"tick failed: {e}")
+
+        ticks += 1
+
+        # Heartbeat — раз в N часов; 0 = выключено.
+        if heartbeat_hours > 0 and bot_token and chat_id:
+            if tick_start - last_heartbeat >= heartbeat_hours * 3600:
+                ok, msg = telegram.send_heartbeat(
+                    bot_token,
+                    chat_id,
+                    uptime_seconds=int(tick_start - started_at),
+                    ticks=ticks,
+                    alerts_sent=alerts_sent,
+                )
+                if ok:
+                    last_heartbeat = tick_start
+                else:
+                    logger.error(f"telegram heartbeat failed: {msg}")
 
         # Decay cooldowns
         suppressed = {k: v - 1 for k, v in suppressed.items() if v - 1 > 0}
@@ -89,7 +131,9 @@ def _handle_alerts(
     ai,
     suppressed,
     logger,
-):
+) -> int:
+    """Process alerts; returns count successfully sent to Telegram."""
+    sent = 0
     for a in alerts:
         key = _alert_key(a)
         if key in suppressed:
@@ -112,8 +156,11 @@ def _handle_alerts(
                 logger.warning(f"AI enrich failed: {e}")
         if bot_token and chat_id:
             ok, msg = telegram.send_alert(bot_token, chat_id, a, ai_text=ai_text)
-            if not ok:
+            if ok:
+                sent += 1
+            else:
                 logger.error(f"telegram send failed: {msg}")
+    return sent
 
 
 def _alert_key(a) -> tuple[str, str]:
