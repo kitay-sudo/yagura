@@ -61,8 +61,12 @@ def _established() -> list[dict]:
                 "laddr": f"{c.laddr.ip}:{c.laddr.port}" if c.laddr else "",
                 "raddr": f"{c.raddr.ip}:{c.raddr.port}",
                 "pid": c.pid,
+                # name() обрезается ядром до 15 символов (TASK_COMM_LEN), поэтому
+                # пути вроде /var/www/balifornia/... превращаются в /var/www/b.
+                # cmdline даёт полную команду — нужно для адекватных алертов.
                 "process": proc["name"],
                 "exe": proc["exe"],
+                "cmdline": proc["cmdline"],
                 "user": proc["user"],
             }
         )

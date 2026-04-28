@@ -96,6 +96,8 @@ footer() {
   printf "         yagura watch start   %s# запустить watchdog в systemd%s\n" "$C_DIM" "$C_RESET"
   printf "         yagura watch status  %s# статус watchdog + алерты%s\n" "$C_DIM" "$C_RESET"
   printf "         yagura watch logs    %s# логи через journalctl%s\n" "$C_DIM" "$C_RESET"
+  printf "         yagura whitelist scan-bundled  %s# bundled-сигнатуры легитимных процессов%s\n" "$C_DIM" "$C_RESET"
+  printf "         yagura whitelist auto          %s# разобрать повторяющиеся алерты в whitelist%s\n" "$C_DIM" "$C_RESET"
   printf "         yagura --help        %s# все команды%s\n\n" "$C_DIM" "$C_RESET"
   printf "  %s─────────────────────────────────────────%s\n" "$C_DIM" "$C_RESET"
   printf "  %sauthor%s    kitay-sudo\n" "$C_DIM" "$C_RESET"

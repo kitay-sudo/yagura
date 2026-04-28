@@ -12,7 +12,7 @@ from yagura.ai.factory import build_client
 from yagura.ai.prompts import build_alert_prompt
 from yagura.config import LOG_DIR, ensure_dirs, get, load_config
 from yagura.watch import baseline as baseline_mod
-from yagura.watch import rules, telegram
+from yagura.watch import known_legit, rules, telegram, triage
 
 ALERT_LOG = LOG_DIR / "alerts.log"
 DEFAULT_INTERVAL_MINUTES = 5
@@ -23,6 +23,12 @@ AI_ENRICH_SEVERITIES = {"HIGH", "CRITICAL"}
 # An alert "fires" only once per (rule_id + key) until it stops firing for COOLDOWN_TICKS ticks.
 # This stops a single ongoing condition from spamming Telegram every interval.
 COOLDOWN_TICKS = 12  # 12 ticks * 5min = 1h with default interval
+
+# После первого алерта мы молчим. Но если условие продолжает выполняться
+# ESCALATE_AFTER_TICKS подряд — присылаем повторный алерт с пометкой [PERSISTENT].
+# Это защита от противоположной крайности: реальная угроза не должна затухнуть
+# в cooldown, потому что оператор мог пропустить первое сообщение.
+ESCALATE_AFTER_TICKS = 5  # ~25 минут на дефолтном интервале
 
 
 def _setup_logging(level: int = logging.INFO) -> logging.Logger:
@@ -48,6 +54,24 @@ def run_forever() -> None:
     interval_sec = max(60, interval_min * 60)
     heartbeat_hours = int(get(cfg, "watch.heartbeat_hours", 12))
 
+    # Auto-apply bundled known-legit signatures before evaluating any rules.
+    # Safe by design: each pack requires BOTH a process AND a destination match
+    # against the live state, and re-applying is idempotent (source-tagged).
+    # We collect the applied packs so we can notify the operator via Telegram —
+    # silently changing security rules without telling the user is exactly the
+    # behavior we don't want.
+    auto_applied: list = []
+    try:
+        matches = known_legit.detect_matches()
+        auto_applied = known_legit.apply_matches(cfg, matches, only_auto=True, actor="auto")
+        if auto_applied:
+            logger.info(
+                f"known_legit: auto-applied {len(auto_applied)} packs at startup"
+            )
+            cfg = load_config()  # reload — apply_matches saved to disk
+    except Exception as e:
+        logger.warning(f"known_legit auto-apply failed: {e}")
+
     baseline = baseline_mod.load()
     if baseline is None:
         logger.error("baseline missing — run `yagura watch start` first to create one")
@@ -60,8 +84,11 @@ def run_forever() -> None:
     ai_model = get(cfg, "ai.model", "") or ""
     ai = build_client(ai_provider, ai_key, ai_model)
 
-    # In-memory cooldown: { (rule_id, key) -> ticks_since_last_seen }
+    # In-memory cooldown:
+    #   suppressed[(rule_id, key)] = ticks_until_unsuppress (decays each tick).
+    # streak[(rule_id, key)] = сколько тиков ПОДРЯД срабатывала условие (для escalation).
     suppressed: dict[tuple[str, str], int] = {}
+    streak: dict[tuple[str, str], int] = {}
 
     logger.info(
         f"interval: {interval_min}m, telegram: {'on' if bot_token else 'off'}, "
@@ -82,6 +109,14 @@ def run_forever() -> None:
         )
         if not ok:
             logger.error(f"telegram startup failed: {msg}")
+        # Уведомление о том, что Yagura САМА добавила правила в whitelist —
+        # отдельным сообщением, чтобы оператор увидел и понял, что заглушено.
+        if auto_applied:
+            ok, msg = telegram.send_whitelist_applied(
+                bot_token, chat_id, applied_packs=auto_applied
+            )
+            if not ok:
+                logger.error(f"telegram whitelist-applied notice failed: {msg}")
 
     # Counters for heartbeat — отражают работу с момента старта сервиса.
     started_at = time.time()
@@ -93,7 +128,9 @@ def run_forever() -> None:
         tick_start = time.time()
         try:
             alerts = rules.evaluate(baseline, cfg)
-            sent = _handle_alerts(alerts, cfg, bot_token, chat_id, ai, suppressed, logger)
+            sent = _handle_alerts(
+                alerts, cfg, bot_token, chat_id, ai, suppressed, streak, logger
+            )
             alerts_sent += sent
         except Exception as e:  # never let a transient error kill the daemon
             logger.exception(f"tick failed: {e}")
@@ -130,16 +167,42 @@ def _handle_alerts(
     chat_id,
     ai,
     suppressed,
+    streak,
     logger,
 ) -> int:
     """Process alerts; returns count successfully sent to Telegram."""
     sent = 0
+    seen_keys: set[tuple[str, str]] = set()
     for a in alerts:
         key = _alert_key(a)
+        seen_keys.add(key)
+        streak[key] = streak.get(key, 0) + 1
+
+        # Suppressed and not yet at escalation threshold → silent.
         if key in suppressed:
-            suppressed[key] = COOLDOWN_TICKS  # extend
+            suppressed[key] = COOLDOWN_TICKS
+            # Escalation: если условие держится N тиков подряд — повторный алерт.
+            if streak[key] == ESCALATE_AFTER_TICKS:
+                logger.warning(
+                    f"ESCALATE {a.rule_id} [{a.severity}] persistent for "
+                    f"{streak[key]} ticks — {a.detail}"
+                )
+                if bot_token and chat_id:
+                    ok, msg = telegram.send_alert(
+                        bot_token, chat_id, a, ai_text=None, persistent_ticks=streak[key]
+                    )
+                    if ok:
+                        sent += 1
+                    else:
+                        logger.error(f"telegram send failed: {msg}")
             continue
+
         suppressed[key] = COOLDOWN_TICKS
+        # Auto-triage: пишет результаты в a.context['triage'] перед отправкой/AI.
+        try:
+            triage.investigate(a)
+        except Exception as e:
+            logger.warning(f"triage failed for {a.rule_id}: {e}")
         logger.warning(f"ALERT {a.rule_id} [{a.severity}] {a.title} — {a.detail}")
         ai_text = None
         if ai is not None and a.severity in AI_ENRICH_SEVERITIES:
@@ -149,7 +212,9 @@ def _handle_alerts(
                     rule_name=a.title,
                     severity=a.severity,
                     details=a.detail,
-                    context=str(a.context)[:500],
+                    # Включая triage dossier — AI получает результаты ps/ss/PTR
+                    # и может дать конкретный совет вместо общих фраз.
+                    context=str(a.context)[:1500],
                 )
                 ai_text = ai.complete(prompt, max_tokens=300)
             except Exception as e:
@@ -160,17 +225,32 @@ def _handle_alerts(
                 sent += 1
             else:
                 logger.error(f"telegram send failed: {msg}")
+
+    # Сбрасываем streak для тех ключей, которые в этом тике не сработали —
+    # условие исчезло, escalation надо начинать с нуля при следующем срабатывании.
+    for k in list(streak.keys()):
+        if k not in seen_keys:
+            del streak[k]
     return sent
 
 
 def _alert_key(a) -> tuple[str, str]:
-    """Stable identity for cooldown — different listener:port → different alert."""
+    """Stable identity for cooldown.
+
+    Для процессных правил key НЕ включает PID — короткоживущие процессы
+    с регулярным перезапуском (новый PID каждый раз) иначе спамят как разные алерты.
+    Используем (exe или cmdline) + raddr — стабильную идентичность процесса.
+    """
     if a.rule_id in ("W-NET-001", "W-PROC-001"):
         lst = a.context.get("listener", {})
-        return (a.rule_id, f"{lst.get('proto')}/{lst.get('port')}/{lst.get('pid')}")
+        return (a.rule_id, f"{lst.get('proto')}/{lst.get('port')}/{lst.get('exe', '')}")
+    if a.rule_id == "W-PROC-002":
+        cmdline = a.context.get("cmdline") or a.context.get("exe") or ""
+        return (a.rule_id, cmdline[:120])
     if a.rule_id == "W-PROC-003":
         c = a.context.get("connection", {})
-        return (a.rule_id, f"{c.get('pid')}->{c.get('raddr')}")
+        ident = c.get("exe") or c.get("cmdline") or c.get("process", "")
+        return (a.rule_id, f"{ident}->{c.get('raddr', '')}")
     if a.rule_id == "W-FILE-001":
         return (a.rule_id, a.context.get("path", ""))
     if a.rule_id in ("W-CRON-001", "W-CRON-002"):

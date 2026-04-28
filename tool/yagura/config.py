@@ -36,6 +36,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "ports": [22, 80, 443],
         "processes": [],
         "ssh_ips": [],
+        # Подстроки cmdline. Если найдена в полной команде процесса —
+        # W-PROC-002 не алертит. Используется для собственных приложений
+        # с высоким CPU (CRM, видеокодеры, дев-серверы).
+        "cmdline_substrings": [],
+        # Пары (cmdline_substring, dest). Подавляют W-PROC-003, только если
+        # СОВПАЛО ОБА условия — иначе атакующий обошёл бы переименованием бинаря
+        # или направив трафик на «доверенный» IP.
+        # Каждый элемент: {cmdline: "fm-agent", dest_hostname: "*.googleapis.com"}
+        # или {cmdline: "fm-agent", dest_ip: "34.102.0.0/16"}
+        "process_dest": [],
     },
     "harden_history": [],
 }

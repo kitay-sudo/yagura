@@ -111,6 +111,34 @@ def _build_parser() -> argparse.ArgumentParser:
     p_wl_rm = p_wl_sub.add_parser("remove")
     p_wl_rm.add_argument("kind", choices=["port", "process", "ssh-ip"])
     p_wl_rm.add_argument("value")
+    p_wl_auto = p_wl_sub.add_parser(
+        "auto",
+        help="Interactive: scan recent alerts and offer to whitelist repeating ones",
+    )
+    p_wl_auto.add_argument(
+        "--yes", action="store_true", help="Auto-accept all repeating alerts (non-interactive)"
+    )
+    p_wl_sb = p_wl_sub.add_parser(
+        "scan-bundled",
+        help="Show which bundled known-legit packs match this host",
+    )
+    p_wl_sb.add_argument(
+        "--apply", action="store_true", help="Apply matched packs (incl. non-auto-apply ones)"
+    )
+    p_wl_ex = p_wl_sub.add_parser(
+        "explain",
+        help="Print the full why/risk/audit description of a bundled pack",
+    )
+    p_wl_ex.add_argument("pack_id")
+    p_wl_rp = p_wl_sub.add_parser(
+        "remove-pack",
+        help="Remove all whitelist entries that came from a specific bundled pack",
+    )
+    p_wl_rp.add_argument("pack_id")
+    p_wl_sub.add_parser(
+        "audit-log",
+        help="Show the audit log of whitelist changes (who applied/removed what, when)",
+    )
 
     p_r = sub.add_parser("report", help="Reports stored in /var/log/yagura")
     p_r_sub = p_r.add_subparsers(dest="report_command")
@@ -456,12 +484,7 @@ def cmd_baseline(args) -> int:
 def cmd_whitelist(args) -> int:
     cfg = load_config()
     if args.whitelist_command == "list":
-        wl = whitelist.list_all(cfg)
-        for k, items in wl.items():
-            console.print(
-                f"[bold]{k}[/bold]: {', '.join(str(x) for x in items) if items else '[muted](empty)[/muted]'}"
-            )
-        return 0
+        return _whitelist_list(cfg)
     if args.whitelist_command == "add":
         kind = (
             "ports"
@@ -482,7 +505,338 @@ def cmd_whitelist(args) -> int:
         ok = whitelist.remove(cfg, kind, args.value)
         console.print(f"{'[ok]✓ removed[/ok]' if ok else '[warn]not found[/warn]'}")
         return 0 if ok else 1
+    if args.whitelist_command == "auto":
+        return _whitelist_auto(cfg, accept_all=getattr(args, "yes", False))
+    if args.whitelist_command == "scan-bundled":
+        return _whitelist_scan_bundled(cfg, apply=getattr(args, "apply", False))
+    if args.whitelist_command == "explain":
+        return _whitelist_explain(args.pack_id)
+    if args.whitelist_command == "remove-pack":
+        return _whitelist_remove_pack(cfg, args.pack_id)
+    if args.whitelist_command == "audit-log":
+        return _whitelist_audit_log()
     return 2
+
+
+def _whitelist_list(cfg: dict) -> int:
+    """Verbose whitelist listing — shows source, capture, and how to remove."""
+    from yagura.watch import known_legit
+
+    wl = whitelist.list_all(cfg)
+    for k, items in wl.items():
+        console.print(
+            f"[bold]{k}[/bold]: {', '.join(str(x) for x in items) if items else '[muted](empty)[/muted]'}"
+        )
+
+    # Group bundled entries by source pack so the operator sees one block per
+    # pack (with description and rollback hint), not a flat dump.
+    raw_pd = (cfg.get("whitelist", {}) or {}).get("process_dest", []) or []
+    raw_cs = (cfg.get("whitelist", {}) or {}).get("cmdline_substrings", []) or []
+    bundled: dict[str, list[tuple[str, dict]]] = {}
+    manual: list[tuple[str, dict | str]] = []
+    for it in raw_pd:
+        src = (it.get("source") if isinstance(it, dict) else None) or "manual"
+        if src.startswith("bundled:"):
+            bundled.setdefault(src, []).append(("process_dest", it))
+        else:
+            manual.append(("process_dest", it))
+    for it in raw_cs:
+        src = (it.get("source") if isinstance(it, dict) else None) or "manual"
+        if src.startswith("bundled:"):
+            bundled.setdefault(src, []).append(("cmdline_substrings", it))
+        else:
+            manual.append(("cmdline_substrings", it))
+
+    if bundled:
+        console.print("\n[bold]Bundled rules (auto-applied at startup):[/bold]")
+        for src_tag, group in sorted(bundled.items()):
+            pack_id = src_tag.split(":", 1)[1]
+            pack = known_legit.find_pack(pack_id) or {}
+            description = pack.get("description", "")
+            applied_at = ""
+            for _, entry in group:
+                if isinstance(entry, dict) and entry.get("applied_at"):
+                    applied_at = entry["applied_at"]
+                    break
+            header = f"  [accent]●[/accent] {pack_id}"
+            if description:
+                header += f" — {description}"
+            console.print(header)
+            if applied_at:
+                console.print(f"    [muted]applied:[/muted]  {applied_at}")
+            for kind, entry in group:
+                payload = (
+                    {kk: vv for kk, vv in entry.items() if kk not in ("source", "applied_at")}
+                    if isinstance(entry, dict)
+                    else entry
+                )
+                console.print(f"    [muted]{kind}:[/muted] {payload}")
+            console.print(
+                f"    [muted]explain:[/muted] yagura whitelist explain {pack_id}"
+            )
+            console.print(
+                f"    [muted]remove:[/muted]  sudo yagura whitelist remove-pack {pack_id}"
+            )
+    if manual:
+        console.print("\n[bold]Manual rules:[/bold]")
+        for kind, entry in manual:
+            payload = (
+                {kk: vv for kk, vv in entry.items() if kk != "source"}
+                if isinstance(entry, dict)
+                else entry
+            )
+            console.print(f"  [muted]{kind}:[/muted] {payload}")
+    return 0
+
+
+def _whitelist_explain(pack_id: str) -> int:
+    """Print the full description of a bundled pack: what, why, risk, how-to-audit."""
+    from yagura.watch import known_legit
+
+    pack = known_legit.find_pack(pack_id)
+    if not pack:
+        console.print(f"[warn]No bundled pack with id '{pack_id}'[/warn]")
+        # Suggest similar ids to help the operator.
+        all_ids = [p.get("id") for p in known_legit.load_packs()]
+        if all_ids:
+            console.print(f"[muted]Available: {', '.join(all_ids)}[/muted]")
+        return 1
+    auto = "yes" if pack.get("auto_apply", True) else "no (operator opt-in only)"
+    console.print(f"\n[bold accent]{pack['id']}[/bold accent]")
+    console.print(f"[bold]Описание:[/bold] {pack.get('description', '')}")
+    console.print(f"[bold]Auto-apply:[/bold] {auto}\n")
+    if pack.get("why"):
+        console.print("[bold]Зачем нужен этот пак:[/bold]")
+        for line in pack["why"].strip().splitlines():
+            console.print(f"  {line}")
+        console.print()
+    if pack.get("risk_assessment"):
+        console.print("[bold]Оценка риска:[/bold]")
+        for line in pack["risk_assessment"].strip().splitlines():
+            console.print(f"  {line}")
+        console.print()
+    if pack.get("how_to_audit"):
+        console.print("[bold]Как проверить вручную:[/bold]")
+        for line in pack["how_to_audit"].strip().splitlines():
+            console.print(f"  {line}")
+        console.print()
+    detect = pack.get("detect", {})
+    if detect:
+        console.print("[bold]Детектится по сигнатуре:[/bold]")
+        import yaml as _yaml
+
+        for line in _yaml.safe_dump(detect, allow_unicode=True, sort_keys=False).splitlines():
+            console.print(f"  [muted]{line}[/muted]")
+    return 0
+
+
+def _whitelist_remove_pack(cfg: dict, pack_id: str) -> int:
+    from yagura.watch import known_legit
+
+    _require_root()
+    n = known_legit.remove_pack(cfg, pack_id, actor="cli:remove-pack")
+    if n == 0:
+        console.print(f"[warn]No entries from pack '{pack_id}' found in whitelist[/warn]")
+        return 1
+    console.print(f"[ok]✓[/ok] removed {n} entries from pack '{pack_id}'")
+    console.print("[muted]Restart watchdog to drop these rules: systemctl restart yagura-watch[/muted]")
+    return 0
+
+
+def _whitelist_audit_log() -> int:
+    from yagura.watch import known_legit
+
+    entries = known_legit.read_audit_log(limit=200)
+    if not entries:
+        console.print("[muted]No whitelist changes recorded yet.[/muted]")
+        return 0
+    console.print("[bold]Whitelist audit log (newest first):[/bold]\n")
+    for e in entries:
+        ts = e.get("timestamp", "?")
+        action = e.get("action", "?")
+        pack = e.get("pack_id", "?")
+        actor = e.get("actor", "?")
+        if action == "apply":
+            n = e.get("entries_added", 0)
+            cap = e.get("captured", {}) or {}
+            cap_str = f" captured={cap}" if cap else ""
+            console.print(
+                f"  [muted]{ts}[/muted]  [ok]+[/ok] apply  [accent]{pack}[/accent]  "
+                f"({n} entries, by {actor}){cap_str}"
+            )
+        elif action == "remove":
+            n = e.get("entries_removed", 0)
+            console.print(
+                f"  [muted]{ts}[/muted]  [warn]−[/warn] remove [accent]{pack}[/accent]  "
+                f"({n} entries, by {actor})"
+            )
+        else:
+            console.print(f"  [muted]{ts}[/muted]  ? {e}")
+    return 0
+
+
+def _whitelist_scan_bundled(cfg: dict, *, apply: bool) -> int:
+    """List bundled known-legit packs that match this host. With --apply, merge them."""
+    from yagura.watch import known_legit
+
+    matches = known_legit.detect_matches()
+    if not matches:
+        console.print("[muted]No bundled signatures match the current host state.[/muted]")
+        return 0
+    console.print(f"[bold]{len(matches)} bundled pack(s) match this host:[/bold]\n")
+    for m in matches:
+        flag = "[ok]auto-apply[/ok]" if m.auto_apply else "[warn]manual[/warn]"
+        console.print(f"  {flag} [accent]{m.pack_id}[/accent] — {m.description}")
+        for e in m.whitelist_entries:
+            preview = {k: v for k, v in e.items() if not k.startswith("_")}
+            console.print(f"      → {e['_target']}: {preview}")
+        if m.captured:
+            console.print(f"      [muted]captured: {m.captured}[/muted]")
+    if not apply:
+        console.print(
+            "\n[muted]Run with --apply to merge these into config "
+            "(auto-apply ones already merged on watch start).[/muted]"
+        )
+        return 0
+    _require_root()
+    # Apply ALL packs (including manual ones) — operator explicitly asked.
+    applied = known_legit.apply_matches(
+        cfg, matches, only_auto=False, actor="cli:scan-bundled"
+    )
+    if not applied:
+        console.print("\n[muted]Nothing new applied (all matched packs already in whitelist).[/muted]")
+        return 0
+    console.print(f"\n[ok]✓[/ok] applied {len(applied)} pack(s):")
+    for m in applied:
+        console.print(f"  [accent]●[/accent] {m.pack_id}  [muted]({len(m.whitelist_entries)} entries)[/muted]")
+    console.print(
+        "\n[muted]Restart watchdog to pick up new rules: "
+        "systemctl restart yagura-watch[/muted]"
+    )
+    return 0
+
+
+def _whitelist_auto(cfg: dict, *, accept_all: bool) -> int:
+    """Scan alerts.log for repeating signatures and offer to whitelist them."""
+    from collections import Counter
+
+    log = LOG_DIR / "alerts.log"
+    if not log.exists():
+        console.print("[muted]No alerts.log yet — let watchdog run for a while first.[/muted]")
+        return 0
+    try:
+        lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as e:
+        console.print(f"[warn]could not read alerts.log: {e}[/warn]")
+        return 1
+
+    # Parse lines like:
+    #   2026-04-28 12:07:00 [WARNING] ALERT W-PROC-003 [CRITICAL] Reverse-shell heuristic — <detail>
+    counter: Counter[tuple[str, str]] = Counter()
+    examples: dict[tuple[str, str], str] = {}
+    for line in lines:
+        if "ALERT W-PROC-00" not in line:
+            continue
+        try:
+            after = line.split("ALERT ", 1)[1]
+            rid = after.split(" ", 1)[0]
+            detail = line.rsplit(" — ", 1)[-1]
+        except IndexError:
+            continue
+        # Use a short signature: rule + first 60 chars of detail (process+endpoint)
+        sig = (rid, detail[:120])
+        counter[sig] += 1
+        examples.setdefault(sig, line)
+
+    repeats = [(sig, n) for sig, n in counter.items() if n >= 2]
+    if not repeats:
+        console.print("[ok]No repeating W-PROC-* alerts found in the log.[/ok]")
+        return 0
+    repeats.sort(key=lambda x: -x[1])
+
+    console.print(f"[bold]Found {len(repeats)} repeating alert signature(s):[/bold]\n")
+    added = 0
+    for (rid, detail), n in repeats:
+        console.print(f"  [warn]×{n}[/warn] [accent]{rid}[/accent]  {detail}")
+        if accept_all:
+            choice = "y"
+        else:
+            try:
+                resp = input("    → whitelist this signature? [y/N/q]: ").strip().lower()
+            except EOFError:
+                resp = "n"
+            if resp == "q":
+                break
+            choice = resp
+        if choice != "y":
+            continue
+        # Heuristic: extract process name + raddr from the detail line.
+        added_now = _whitelist_from_alert_line(cfg, rid, detail)
+        if added_now:
+            added += added_now
+            console.print(f"    [ok]✓[/ok] added {added_now} entry/entries")
+        else:
+            console.print("    [warn]could not parse this alert into a whitelist rule[/warn]")
+    if added:
+        save_config(cfg)
+    console.print(f"\n[bold]Done — added {added} entries to whitelist.[/bold]")
+    if added:
+        console.print("[muted]Restart watchdog to pick up new rules: systemctl restart yagura-watch[/muted]")
+    return 0
+
+
+def _whitelist_from_alert_line(cfg: dict, rid: str, detail: str) -> int:
+    """Parse an alert detail string and add a matching whitelist entry."""
+    cfg.setdefault("whitelist", {})
+    if rid == "W-PROC-003":
+        # Detail format: "<cmdline> (PID N, user U) → ESTABLISHED IP:PORT"
+        if "→ ESTABLISHED " not in detail or " (PID " not in detail:
+            return 0
+        cmdline = detail.split(" (PID ", 1)[0].strip()
+        ip_part = detail.rsplit("→ ESTABLISHED ", 1)[1].strip()
+        ip = ip_part.rsplit(":", 1)[0]
+        # Use the user name (most stable identifier) as the cmdline matcher.
+        user_token = ""
+        try:
+            user_token = detail.split("user ", 1)[1].split(")", 1)[0].strip()
+        except IndexError:
+            pass
+        match_str = user_token or _stable_cmdline_token(cmdline)
+        if not match_str:
+            return 0
+        cfg["whitelist"].setdefault("process_dest", []).append(
+            {"cmdline": match_str, "dest_ip": ip + "/32", "source": "manual:auto"}
+        )
+        return 1
+    if rid == "W-PROC-002":
+        # Detail format: "<cmdline> (PID N, CPU X%, user U) has network connections [...]"
+        if " (PID " not in detail:
+            return 0
+        cmdline = detail.split(" (PID ", 1)[0].strip()
+        token = _stable_cmdline_token(cmdline)
+        if not token:
+            return 0
+        cfg["whitelist"].setdefault("cmdline_substrings", []).append(
+            {"value": token, "source": "manual:auto"}
+        )
+        return 1
+    return 0
+
+
+def _stable_cmdline_token(cmdline: str) -> str:
+    """Pick a stable distinctive substring from cmdline for whitelist matching."""
+    if not cmdline:
+        return ""
+    # prefer a path component with hyphens/underscores, length ≥ 6
+    parts = [p for p in cmdline.replace("\\", "/").split("/") if p]
+    for p in reversed(parts):
+        if len(p) >= 6 and ("-" in p or "_" in p) and not p.startswith("-"):
+            return p
+    # fallback: first non-flag word ≥ 6 chars
+    for tok in cmdline.split():
+        if len(tok) >= 6 and not tok.startswith("-"):
+            return tok
+    return ""
 
 
 # ---------- report ----------

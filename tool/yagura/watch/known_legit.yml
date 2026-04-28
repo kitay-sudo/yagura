@@ -1,0 +1,141 @@
+# YAGURA — bundled signatures of known-legit processes that trip W-PROC heuristics.
+#
+# Each pack is matched against the LIVE state at watch start. If a process matching
+# the `detect` block is currently running, the corresponding `whitelist` entries
+# are merged into the user's config (with source: "bundled:<pack_id>" tags so the
+# operator can audit / remove them later via `yagura whitelist list`).
+#
+# DESIGN RULE: a pack is applied ONLY if the live process matches BOTH cmdline AND
+# user (or another fingerprint). A signature alone is not enough — otherwise an
+# attacker could pre-stage a binary with a known name to silently bypass detection.
+#
+# Each pack MUST include `why` and `risk_assessment` so an operator reading
+# `yagura whitelist list` can understand what was silenced and why it's safe.
+
+version: 1
+
+packs:
+  # --- Vertex AI / Google APIs python agents ---
+  - id: google-api-python-agent
+    description: "python3 agent talking to Google Cloud APIs (Vertex AI, googleapis)"
+    why: |
+      Многие fleet-management / monitoring / AI стеки запускают python3-агент,
+      который опрашивает Google Vertex AI или Google Cloud APIs. Правило
+      W-PROC-003 (reverse-shell heuristic) срабатывает на любой python3 с
+      установленным внешним соединением — потому что реверс-шелл выглядит
+      идентично. Этот пак отличает легитимный AI-агент от атаки по комбинации
+      выделенный сервис-пользователь + Google IP.
+    risk_assessment: |
+      LOW — пак требует ОДНОВРЕМЕННОГО совпадения трёх условий:
+        1. процесс python или python3
+        2. под выделенным сервис-пользователем (fm-agent, cloud-agent,
+           gcp-agent, vertex-agent, ai-agent)
+        3. с трафиком в *.googleusercontent.com или *.googleapis.com
+      Атакующему собрать такую комбинацию случайно невозможно — нужно
+      специально целиться в Yagura, ЗНАТЬ имя выделенного пользователя на
+      этом хосте И иметь свой C2 в Google Cloud с подходящим PTR. Если на
+      сервере НЕТ таких выделенных юзеров, пак просто не сматчится.
+    how_to_audit: |
+      Проверить, какие реальные процессы попали под пак:
+        ps -u fm-agent -o pid,user,comm,cmd
+        ss -tnp | grep -E '(fm|cloud|gcp|vertex|ai)-agent'
+      Если видно неожиданный процесс — удалить пак:
+        sudo yagura whitelist remove-pack google-api-python-agent
+    detect:
+      kind: established
+      process_in: [python, python3]
+      dest_hostname_suffix:
+        - .googleusercontent.com
+        - .googleapis.com
+        - .google.com
+      user_in:
+        - fm-agent
+        - cloud-agent
+        - gcp-agent
+        - vertex-agent
+        - ai-agent
+    whitelist:
+      process_dest:
+        - cmdline_user_match: true
+          dest_hostname: "*.googleusercontent.com"
+        - cmdline_user_match: true
+          dest_hostname: "*.googleapis.com"
+
+  # --- Node.js application servers with localhost DB ---
+  - id: nodejs-localhost-db-app
+    description: "Node.js app server with PostgreSQL/MySQL on localhost"
+    why: |
+      Node.js приложения (CRM-системы, дэшборды, REST API) под нагрузкой
+      легко уходят за 80% CPU и одновременно держат сетевые соединения с
+      БД, Telegram Bot API, SMTP и т.д. Это идентичный отпечаток с
+      cryptominer'ом по правилу W-PROC-002. Пак отличает легитимное
+      Node.js приложение по наличию соединений на localhost-порт БД
+      (PostgreSQL/MySQL/Redis/Mongo) — майнеры так не делают.
+    risk_assessment: |
+      MEDIUM — пак НЕ применяется автоматически (auto_apply: false), потому
+      что node /var/www/<что-угодно> — слишком широкий паттерн. Любое ваше
+      или НЕ ваше Node.js приложение попало бы под него. Применяется только
+      явной командой `sudo yagura whitelist scan-bundled --apply`.
+      После применения whitelist-запись содержит конкретное имя приложения
+      (директория из cmdline), а не общий паттерн «любой node».
+    how_to_audit: |
+      Посмотреть, что именно заглушено:
+        sudo yagura whitelist list
+      Полный путь приложения и его соединения:
+        ps -fp $(pgrep -f "имя-вашего-приложения")
+        ss -tnp | grep node
+      Откатить пак:
+        sudo yagura whitelist remove-pack nodejs-localhost-db-app
+    auto_apply: false
+    detect:
+      kind: high_cpu_with_local_db
+      process_in: [node]
+      cmdline_substring_min_length: 12
+    whitelist:
+      cmdline_substrings:
+        - cmdline_capture: true
+
+  # --- GoDaddy/SecureServer hostname pattern ---
+  - id: godaddy-securepod
+    description: "GoDaddy SecureServer host running Securepod-style python agents"
+    why: |
+      Хостинг GoDaddy на машинах с FQDN *.host.secureserver.net запускает
+      собственный демон Securepod, который порождает короткоживущие
+      python3-процессы для общения с Google Cloud (Vertex AI). Они
+      перезапускаются каждый час с новым PID, что превращает W-PROC-003 в
+      шумный поток алертов. Этот пак сматчит хост по hostname-суффиксу И
+      по живому процессу — двойная проверка.
+    risk_assessment: |
+      LOW — пак требует ОДНОВРЕМЕННО:
+        1. FQDN хоста заканчивается на .host.secureserver.net или
+           .secureserver.net
+        2. живой python3-процесс с трафиком в *.googleusercontent.com
+           или *.googleapis.com
+      Атакующему пришлось бы сначала попасть на GoDaddy-хостинг с этим
+      именем И иметь C2 в Google Cloud — комбинация, которую он не выберет
+      случайно. Если ваш хост НЕ на GoDaddy SecureServer, пак не сматчится.
+    how_to_audit: |
+      Проверить hostname:
+        hostname -f
+      Проверить, какие процессы Securepod сейчас работают:
+        pgrep -af python3
+        ss -tnp | grep ':443'
+      Откатить пак:
+        sudo yagura whitelist remove-pack godaddy-securepod
+    detect:
+      kind: hostname_match
+      hostname_suffix:
+        - .host.secureserver.net
+        - .secureserver.net
+      requires_live_match:
+        kind: established
+        process_in: [python, python3]
+        dest_hostname_suffix:
+          - .googleusercontent.com
+          - .googleapis.com
+    whitelist:
+      process_dest:
+        - cmdline_user_match: true
+          dest_hostname: "*.googleusercontent.com"
+        - cmdline_user_match: true
+          dest_hostname: "*.googleapis.com"
