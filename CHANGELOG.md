@@ -5,14 +5,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [0.7.0] — 2026-04-28
+## [0.11.0] — 2026-04-28
+
+### Added
+
+- Лендинг получил секцию "Журнал изменений" перед футером — последние релизы со ссылками на полный CHANGELOG и GitHub releases. В верхнем меню новые ссылки "Изменения" и "Стена чести" (как в [goronin](https://github.com/kitay-sudo/goronin)).
+- Фавикон [frontend/public/favicon.svg](frontend/public/favicon.svg) — двухъярусная башня в sky-теме на тёмно-синем фоне со скруглением, парная стилистике goronin.
+
+### Changed
+
+- Логотип башни ([YaguraMark.jsx](frontend/src/components/landing/YaguraMark.jsx)) переделан: вместо плоского треугольника с прямоугольным телом — двухъярусная пагода с подвернутыми карнизами, финиалом-шпилем, конусоидальным телом и арроу-слит бойницами. Читается как башня даже на 22px в шапке.
+- Восстановлено отслеживание `frontend/` в Git — раньше папка была в `.gitignore` (commit befe034), что ломало `pages.yml` workflow и не давало деплоиться. Теперь Pages автоматически билдит и деплоит лендинг на каждый push с изменениями в `frontend/**`. Только `node_modules/` и `dist/` остаются игнорируемыми.
+
+## [0.10.0] — 2026-04-28
 
 ### Added
 
 - Install-time triage-визард ([yagura/watch/triage_install.py](tool/yagura/watch/triage_install.py)). При `yagura watch start` (и в новой команде `yagura watch wizard`) Yagura собирает listeners + enabled units, отправляет один запрос в AI с просьбой классифицировать каждый как `system / known_app / custom / suspicious`, показывает оператору таблицу с командами `4w 5b 6s` / `all-w` / `q` и сохраняет решения в `whitelist` / `blocklist` ДО построения baseline. Это убирает шквал W-NET-001 на собственные сервисы оператора (типа `goronin`, `balifornia-crm`) сразу на старте.
 - Без TTY (CI / unattended deploy) визард сам применяет AI-рекомендации и пишет решения в `whitelist-audit.log` с тегом `install_wizard:<timestamp>`.
 - Флаги `yagura watch start --no-triage` / `--interactive` для пропуска или форс-режима визарда.
-- Структурированный AI-вердикт ([yagura/ai/verdict.py](tool/yagura/ai/verdict.py)): модель отвечает строгим JSON `{verdict, one_line, action, full}` с enum-вердиктом (`legit_self / legit_known_app / suspicious / critical / unknown`). Парсер толерантен к `\`\`\`json` fences и трейлинг-прозе.
+- Структурированный AI-вердикт ([yagura/ai/verdict.py](tool/yagura/ai/verdict.py)): модель отвечает строгим JSON `{verdict, one_line, action, full}` с enum-вердиктом (`legit_self / legit_known_app / suspicious / critical / unknown`). Парсер толерантен к ` ```json ` fences и трейлинг-прозе.
 - Retry-фоллбек: если JSON не распарсился — один retry со строгим напоминанием, ещё один фейл — детерминированный `static_fallback`. Никаких бесконечных циклов.
 - Новая секция конфига `blocklist.processes` / `blocklist.units` для процессов, помеченных оператором как "не должно тут быть". Это **только** повышает severity при следующем срабатывании — Yagura никогда не убивает процессы автоматически.
 
@@ -26,7 +38,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - На паре одинаковых W-NET-001 (например, `goronin` PID 2100527 на портах 10001 и 20472) AI больше не выдаёт противоречивые вердикты — JSON-схема и enum убирают почву под "ложная тревога" / "kill процесс" в соседних тиках.
 
-## [0.6.0] — 2026-04-28
+## [0.9.0] — 2026-04-28
 
 ### Added
 
@@ -35,14 +47,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `yagura whitelist explain <pack_id>` — печатает полное `why` / `risk` / `audit` описание bundled-пака.
 - `yagura whitelist remove-pack <pack_id>` — удаляет все entries, добавленные конкретным bundled-паком (с записью в audit log).
 - `yagura whitelist audit-log` — журнал кто-что-когда добавлял в whitelist.
-- Heartbeat-уведомления в Telegram (раз в `watch.heartbeat_hours` часов; `0` = выключено) с uptime, кол-вом тиков и алертов.
-- Startup-уведомление в Telegram при запуске `yagura-watch.service`.
+- Bundled-сигнатуры известных легитимных приложений ([known_legit.yml](tool/yagura/watch/known_legit.yml)) — Yagura авто-применяет правила тихого подавления для общеизвестных пар «процесс + назначение» (например, `fm-agent → *.googleusercontent.com`). Безопасность дизайна: каждый pack требует совпадения И процесса И назначения; стенд-элон cmdline-матч не пройдёт.
+- Auto-triage dossier ([yagura/watch/triage.py](tool/yagura/watch/triage.py)) — перед отправкой алерта Yagura собирает `ps -fp`, `ss`, `/proc/<pid>/cmdline`, reverse-DNS, родительский PID, systemd-unit. Триаж может только ДОБАВЛЯТЬ информацию и максимум ПОНИЖАТЬ severity — никогда не глушит HIGH/CRITICAL без явных классификаторских доказательств.
+- Telegram-уведомление при auto-применении whitelist-правил на старте watch — оператор сразу видит, что было заглушено и почему, плюс команды для отката (`sudo yagura whitelist remove-pack <id>`).
 
 ### Changed
 
-- W-NET-001 не алертит на эфемерных портах (>= 32768) для процессов, уже известных в baseline по exe — это были в основном клиентские сокеты, которые psutil показывал как `LISTEN`.
-- W-NET-001 / W-PROC-001/002/003 умеют распознавать собственные артефакты Yagura и не алертить на них.
 - W-PROC-002 для процессов, держащих соединения на localhost к стандартным DB-портам (5432, 3306, 6379, 27017, 11211, 9200, 5672, 4222), понижает severity до LOW — это почти всегда легитимные приложения, не майнеры.
+- W-PROC-002 учитывает whitelist по cmdline (например, `balifornia-crm` подавляет высокий-CPU алерт от `node /var/www/balifornia/...`).
+- W-PROC-003 использует whitelist пар (cmdline + dest) — атакующий не пройдёт, переименовав бинарь в `fm-agent`, потому что нужно совпасть и cmdline и hostname/IP.
+
+## [0.8.0] — 2026-04-28
+
+### Changed
+
+- W-NET-001 не алертит на эфемерных портах (≥ 32768) для процессов, уже известных в baseline по exe — это были в основном клиентские сокеты, которые psutil показывал как `LISTEN`. Уменьшает шум от postgres/redis/python-сервисов с динамическими портами.
+- W-NET-001 / W-PROC-001 / W-PROC-003 распознают собственные артефакты Yagura и не алертят на них — раньше после установки приходил алерт про собственный watchdog-процесс.
+
+### Added
+
+- 172 строки новых тестов в [test_rules.py](tool/tests/test_rules.py) — покрывают сценарии self-detection, ephemeral-port suppression, и комбинации с whitelist.
+
+## [0.7.0] — 2026-04-28
+
+### Added
+
+- Heartbeat-уведомления в Telegram (раз в `watch.heartbeat_hours` часов; `0` = выключено) с uptime, кол-вом тиков и алертов — видно, что watchdog жив и работает.
+- Startup-уведомление в Telegram при запуске `yagura-watch.service` — сразу понятно, что сервис поднялся после перезагрузки.
+
+### Changed
+
+- В дефолтный конфиг добавлено поле `watch.heartbeat_hours` (по умолчанию 12 — два раза в сутки).
+
+## [0.6.0] — 2026-04-28
+
+### Added
+
+- GitHub Actions workflow [pages.yml](.github/workflows/pages.yml) — автодеплой лендинга на GitHub Pages при push изменений в `frontend/**`. Использует официальные `actions/upload-pages-artifact` + `actions/deploy-pages` без сторонних `gh-pages` бренчей.
+- README обновлён с инструкциями по приватному репо (`GITHUB_TOKEN` для install.sh).
+
+### Changed
+
+- Документация полностью переехала с GitLab на GitHub — все ссылки в README, CHANGELOG, HOW_IT_WORKS, ui/report.py обновлены.
+- Иконки severity в Telegram-алертах синхронизированы с goronin: 🥊 (CRITICAL), 🍑 (HIGH), 🍔 (MEDIUM), 🥝 (LOW).
 
 ## [0.5.0] — 2026-04-28
 
@@ -115,7 +162,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 **CI/CD:**
 - GitHub Actions: `ci.yml` (lint `ruff`, `pytest`, build), `release.yml` (sdist+wheel на push тега `v*`).
 
-[Unreleased]: https://github.com/kitay-sudo/yagura/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/kitay-sudo/yagura/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/kitay-sudo/yagura/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/kitay-sudo/yagura/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/kitay-sudo/yagura/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/kitay-sudo/yagura/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/kitay-sudo/yagura/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/kitay-sudo/yagura/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/kitay-sudo/yagura/compare/v0.4.0...v0.5.0
