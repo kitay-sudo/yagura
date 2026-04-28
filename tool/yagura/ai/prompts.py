@@ -66,6 +66,41 @@ def build_alert_prompt(
     )
 
 
+INSTALL_TRIAGE_PROMPT = """Ты — security-инженер, помогаешь оператору классифицировать процессы и сервисы Linux-сервера на стадии установки Yagura.
+
+Тебе дан JSON-список найденных listeners и enabled systemd units. Для КАЖДОГО элемента дай вердикт.
+
+Yagura-артефакты (бинарь /usr/local/bin/yagura, /opt/yagura/*, юниты yagura-*) — verdict = "system".
+
+ВХОД:
+{items_json}
+
+ЗАДАЧА: верни СТРОГО один JSON-массив, длина равна длине входа, тот же порядок:
+
+[
+  {{
+    "index": 0,
+    "verdict": "system" | "known_app" | "custom" | "suspicious",
+    "one_line": "<до 80 символов, человекочитаемо>",
+    "recommend": "whitelist" | "block" | "skip"
+  }},
+  ...
+]
+
+ПРАВИЛА:
+- system    — стандартные системные сервисы (sshd, systemd-*, cron, dbus, networkd, resolved). recommend = "whitelist".
+- known_app — общеизвестное ПО (nginx, apache, postgres, mysql, redis, mongo, docker, kubelet). recommend = "whitelist".
+- custom    — пользовательский сервис под systemd, exe в /usr/local/bin или /opt, не похоже на malware. recommend = "skip" (пусть оператор решит сам).
+- suspicious — exe в /tmp,/dev/shm,/var/tmp; имя замаскировано (`.foo`, `kworker-XYZ`); listener на нестандартном порту от неизвестного бинаря. recommend = "block".
+
+Не пиши markdown, не пиши ```json. Только массив JSON.
+"""
+
+
+def build_install_triage_prompt(items: list[dict]) -> str:
+    return INSTALL_TRIAGE_PROMPT.format(items_json=json.dumps(items, ensure_ascii=False, indent=2))
+
+
 def _shrink_snapshot(snapshot: dict) -> dict:
     """Drop verbose fields to keep the AI prompt small (cheaper, faster)."""
     out: dict = {}

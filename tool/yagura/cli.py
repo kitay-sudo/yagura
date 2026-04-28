@@ -90,11 +90,30 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_w = sub.add_parser("watch", help="Manage the watchdog daemon")
     p_w_sub = p_w.add_subparsers(dest="watch_command", required=True)
-    p_w_sub.add_parser("start", help="Install and start yagura-watch.service")
+    p_w_start = p_w_sub.add_parser("start", help="Install and start yagura-watch.service")
+    p_w_start.add_argument(
+        "--no-triage",
+        action="store_true",
+        help="Skip the install-time triage wizard (whitelist/block classification)",
+    )
+    p_w_start.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Force interactive triage even if stdin is not a TTY",
+    )
     p_w_sub.add_parser("stop", help="Stop and disable yagura-watch.service")
     p_w_sub.add_parser("status", help="Show daemon status + recent alerts")
     p_w_sub.add_parser("logs", help="Tail journalctl -u yagura-watch")
     p_w_sub.add_parser("run", help="Run the monitor loop in foreground (used by systemd)")
+    p_w_wiz = p_w_sub.add_parser(
+        "wizard",
+        help="Re-run the install-time triage (classify processes, build whitelist/block)",
+    )
+    p_w_wiz.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Force interactive even if stdin is not a TTY",
+    )
 
     p_b = sub.add_parser("baseline", help="Manage baseline")
     p_b_sub = p_b.add_subparsers(dest="baseline_command", required=True)
@@ -358,7 +377,10 @@ def _harden_rollback(action_id: str) -> int:
 
 def cmd_watch(args) -> int:
     if args.watch_command == "start":
-        return _watch_start()
+        return _watch_start(
+            skip_triage=getattr(args, "no_triage", False),
+            force_interactive=getattr(args, "interactive", False),
+        )
     if args.watch_command == "stop":
         return _watch_stop()
     if args.watch_command == "status":
@@ -368,7 +390,23 @@ def cmd_watch(args) -> int:
     if args.watch_command == "run":
         monitor.run_forever()
         return 0
+    if args.watch_command == "wizard":
+        return _watch_wizard(force_interactive=getattr(args, "interactive", False))
     return 2
+
+
+def _watch_wizard(*, force_interactive: bool) -> int:
+    """Re-run install-time triage standalone (post-install adjustments)."""
+    _require_root()
+    cfg = load_config()
+    from yagura.watch import triage_install
+
+    provider = get(cfg, "ai.provider", "none")
+    api_key = get(cfg, "ai.api_key", "")
+    ai = build_client(provider, api_key, get(cfg, "ai.model", "")) if api_key else None
+    outcome = triage_install.run(console, cfg, ai, force_interactive=force_interactive)
+    triage_install.render_summary(console, outcome)
+    return 0
 
 
 def _enable_watch(cfg: dict) -> None:
@@ -387,6 +425,13 @@ def _enable_watch(cfg: dict) -> None:
     set_value(cfg, "watch.telegram.bot_token", bot_token)
     set_value(cfg, "watch.telegram.chat_id", chat_id)
     save_config(cfg)
+
+    # Install-time triage: classify listeners + units BEFORE baseline so the
+    # operator's known apps go into whitelist on first boot, and we don't bomb
+    # them with W-NET/W-PROC alerts on every tick.
+    _run_install_triage(cfg)
+
+    cfg = load_config()  # reload — triage may have written whitelist entries
     base = baseline_mod.build()
     baseline_mod.save(base)
     console.print(
@@ -399,13 +444,36 @@ def _enable_watch(cfg: dict) -> None:
     console.print("[ok]✓[/ok] yagura-watch.service enabled")
 
 
-def _watch_start() -> int:
+def _run_install_triage(cfg: dict, *, force_interactive: bool = False) -> None:
+    """Classify processes and persist whitelist/blocklist before baseline.
+
+    Failures are non-fatal — if AI is off and heuristics don't classify
+    anything, we just continue without a wizard run.
+    """
+    from yagura.watch import triage_install
+
+    provider = get(cfg, "ai.provider", "none")
+    api_key = get(cfg, "ai.api_key", "")
+    ai = build_client(provider, api_key, get(cfg, "ai.model", "")) if api_key else None
+    console.print("\n[accent]→[/accent] триаж процессов перед стартом...")
+    try:
+        outcome = triage_install.run(console, cfg, ai, force_interactive=force_interactive)
+    except Exception as e:
+        console.print(f"[warn]триаж не выполнен: {e}[/warn]")
+        return
+    triage_install.render_summary(console, outcome)
+
+
+def _watch_start(*, skip_triage: bool = False, force_interactive: bool = False) -> int:
     _require_root()
     cfg = load_config()
     if not get(cfg, "watch.telegram.bot_token"):
         console.print("[muted]Telegram not configured — running enable wizard...[/muted]")
         _enable_watch(cfg)
         return 0
+    if not skip_triage:
+        _run_install_triage(cfg, force_interactive=force_interactive)
+        cfg = load_config()
     base = baseline_mod.build()
     baseline_mod.save(base)
     monitor.install_systemd_unit()

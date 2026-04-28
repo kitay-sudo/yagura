@@ -9,7 +9,12 @@ from pathlib import Path
 
 from yagura import __version__
 from yagura.ai.factory import build_client
-from yagura.ai.prompts import build_alert_prompt
+from yagura.ai.verdict import (
+    AlertVerdict,
+    build_alert_verdict_prompt,
+    get_verdict_with_retry,
+    static_fallback,
+)
 from yagura.config import LOG_DIR, ensure_dirs, get, load_config
 from yagura.watch import baseline as baseline_mod
 from yagura.watch import known_legit, rules, telegram, triage
@@ -188,8 +193,15 @@ def _handle_alerts(
                     f"{streak[key]} ticks — {a.detail}"
                 )
                 if bot_token and chat_id:
+                    # Escalation reuses the deterministic verdict (no AI call —
+                    # we already paid for one on the original alert).
+                    esc_verdict = _make_verdict(a, ai=None)
                     ok, msg = telegram.send_alert(
-                        bot_token, chat_id, a, ai_text=None, persistent_ticks=streak[key]
+                        bot_token,
+                        chat_id,
+                        a,
+                        verdict=esc_verdict,
+                        persistent_ticks=streak[key],
                     )
                     if ok:
                         sent += 1
@@ -204,23 +216,20 @@ def _handle_alerts(
         except Exception as e:
             logger.warning(f"triage failed for {a.rule_id}: {e}")
         logger.warning(f"ALERT {a.rule_id} [{a.severity}] {a.title} — {a.detail}")
-        ai_text = None
-        if ai is not None and a.severity in AI_ENRICH_SEVERITIES:
-            try:
-                prompt = build_alert_prompt(
-                    rule_id=a.rule_id,
-                    rule_name=a.title,
-                    severity=a.severity,
-                    details=a.detail,
-                    # Включая triage dossier — AI получает результаты ps/ss/PTR
-                    # и может дать конкретный совет вместо общих фраз.
-                    context=str(a.context)[:1500],
-                )
-                ai_text = ai.complete(prompt, max_tokens=300)
-            except Exception as e:
-                logger.warning(f"AI enrich failed: {e}")
+
+        # Verdict pipeline: deterministic self-check first → AI → static fallback.
+        # The deterministic check matters because AI was producing contradictory
+        # verdicts on the same yagura-self process across consecutive alerts.
+        # By short-circuiting here, the operator gets a stable answer.
+        verdict = _make_verdict(a, ai)
+        # Full AI text → log only (alerts.log). Telegram gets one_line + action.
+        if verdict and verdict.full:
+            logger.info(
+                f"VERDICT {a.rule_id} [{verdict.verdict}/{verdict.source}] {verdict.full}"
+            )
+
         if bot_token and chat_id:
-            ok, msg = telegram.send_alert(bot_token, chat_id, a, ai_text=ai_text)
+            ok, msg = telegram.send_alert(bot_token, chat_id, a, verdict=verdict)
             if ok:
                 sent += 1
             else:
@@ -232,6 +241,56 @@ def _handle_alerts(
         if k not in seen_keys:
             del streak[k]
     return sent
+
+
+def _make_verdict(a, ai) -> AlertVerdict | None:
+    """Build a verdict for an alert.
+
+    Order:
+      1. Deterministic self-detect (yagura's own bin/unit). If matched, return
+         the static `legit_self` verdict — DON'T call AI for these. We learned
+         the hard way that AI gives different answers for the same self-process
+         across consecutive ticks; the heuristic is stable.
+      2. If AI is configured AND severity is HIGH/CRITICAL, ask AI for a
+         structured verdict (with one retry on parse failure).
+      3. Otherwise (or if AI fails twice), return the static fallback so the
+         alert still ships with SOMETHING actionable.
+    """
+    is_self = _is_self_alert(a)
+    if is_self:
+        return static_fallback(a.rule_id, a.severity, is_self=True)
+    if ai is None or a.severity not in AI_ENRICH_SEVERITIES:
+        # No AI for LOW/MEDIUM by policy (cost). LOW alerts ship without verdict
+        # — the alert body itself is enough at that severity.
+        if a.severity in AI_ENRICH_SEVERITIES:
+            return static_fallback(a.rule_id, a.severity, is_self=False)
+        return None
+    prompt = build_alert_verdict_prompt(
+        rule_id=a.rule_id,
+        rule_name=a.title,
+        severity=a.severity,
+        details=a.detail,
+        context=str(a.context)[:1500],
+    )
+    v = get_verdict_with_retry(ai, prompt)
+    if v is None:
+        return static_fallback(a.rule_id, a.severity, is_self=False)
+    return v
+
+
+def _is_self_alert(a) -> bool:
+    """Deterministic check: does the alert reference Yagura's own artifacts?"""
+    rid = a.rule_id
+    if rid in ("W-NET-001", "W-PROC-001"):
+        lst = a.context.get("listener", {}) or {}
+        return rules._is_self(lst)
+    if rid == "W-SVC-001":
+        unit = a.context.get("unit", "") or ""
+        return unit.startswith("yagura-")
+    if rid == "W-PROC-003":
+        c = a.context.get("connection", {}) or {}
+        return rules._is_self({"process": c.get("process", ""), "exe": c.get("exe", "")})
+    return False
 
 
 def _alert_key(a) -> tuple[str, str]:

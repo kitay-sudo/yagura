@@ -47,6 +47,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # или {cmdline: "fm-agent", dest_ip: "34.102.0.0/16"}
         "process_dest": [],
     },
+    # Blocklist: оператор пометил процесс/юнит как «не должен здесь быть».
+    # Это НЕ автоблок — Yagura никогда не убивает процессы сама. Вместо этого
+    # alert.severity повышается до CRITICAL при следующем срабатывании, чтобы
+    # оператор увидел его сразу и в первую очередь.
+    "blocklist": {
+        "processes": [],  # list of {value: <exe>, source: "install_wizard:..."}
+        "units": [],      # list of {value: "foo.service", source: "..."}
+    },
     "harden_history": [],
 }
 
