@@ -290,7 +290,12 @@ cp -r "$SRC_DIR/tool" "$TOOL_DIR"
 ok "tool/ синхронизирован"
 
 # venv: create on first install, reuse on update.
-if [[ ! -d "$VENV_DIR" ]]; then
+# Проверяем bin/python, а не саму директорию: после неудачной установки
+# (отсутствовал python3-venv) могла остаться пустая VENV_DIR.
+if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+  if [[ -d "$VENV_DIR" ]]; then
+    rm -rf "$VENV_DIR"
+  fi
   step "создание venv в $VENV_DIR"
   python3 -m venv "$VENV_DIR"
   ok "venv создан"
