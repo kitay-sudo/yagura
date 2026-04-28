@@ -41,6 +41,13 @@ console = Console(theme=YAGURA_THEME)
 
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
+
+    # Allow `yagura help` as a friendly alias for `--help`.
+    raw = sys.argv[1:] if argv is None else argv
+    if raw and raw[0] == "help":
+        parser.print_help()
+        return 0
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -120,6 +127,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_c_set.add_argument("value")
 
     sub.add_parser("uninstall", help="Roll back all changes and remove Yagura")
+
+    sub.add_parser("health", help="Quick status: watchdog, uptime, last alerts, last scan")
 
     return p
 
@@ -593,6 +602,133 @@ def cmd_uninstall(_args) -> int:
     return 0
 
 
+# ---------- health ----------
+
+
+def _has_systemctl() -> bool:
+    from shutil import which
+
+    return which("systemctl") is not None
+
+
+def _fmt_uptime(seconds: int) -> str:
+    days, rem = divmod(seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, _ = divmod(rem, 60)
+    if days:
+        return f"{days}d {hours}h {minutes}m"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+def cmd_health(_args) -> int:
+    """Compact dashboard: watchdog state, uptime, last alerts, last scan, AI provider."""
+    from yagura.collectors import system as sys_collector
+
+    console.print()
+    console.print("[bold]YAGURA · health[/bold]")
+    console.print()
+
+    # --- system uptime ---
+    sysinfo = sys_collector.collect()
+    uptime = _fmt_uptime(int(sysinfo.get("uptime_seconds", 0)))
+    distro = sysinfo.get("distro", {}).get("name", "?")
+    kernel = sysinfo.get("kernel", "?")
+    load = sysinfo.get("load", [0.0, 0.0, 0.0])
+    mem = sysinfo.get("memory", {})
+    mem_pct = mem.get("percent", 0)
+    console.print(f"  [muted]host[/muted]      {sysinfo.get('hostname', '?')} · {distro}")
+    console.print(f"  [muted]kernel[/muted]    {kernel}")
+    console.print(f"  [muted]uptime[/muted]    {uptime}")
+    console.print(
+        f"  [muted]load[/muted]      {load[0]:.2f} / {load[1]:.2f} / {load[2]:.2f}  "
+        f"[muted](1m / 5m / 15m)[/muted]"
+    )
+    console.print(f"  [muted]memory[/muted]    {mem_pct}% used")
+    console.print()
+
+    # --- watchdog status ---
+    if not _has_systemctl():
+        console.print("  [muted]watch[/muted]     [warn]n/a[/warn] — systemd не найден на этом хосте")
+    else:
+        rc = subprocess.call(
+            ["systemctl", "is-active", "--quiet", "yagura-watch.service"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if rc == 0:
+            out = subprocess.run(
+                ["systemctl", "show", "yagura-watch.service",
+                 "--property=ActiveEnterTimestamp,ActiveState,SubState"],
+                capture_output=True, text=True,
+            )
+            props = dict(
+                line.split("=", 1) for line in out.stdout.strip().splitlines() if "=" in line
+            )
+            active_since = props.get("ActiveEnterTimestamp", "?")
+            sub = props.get("SubState", "?")
+            console.print(f"  [muted]watch[/muted]     [ok]●[/ok] active ({sub})")
+            console.print(f"  [muted]since[/muted]     {active_since}")
+        else:
+            console.print(
+                "  [muted]watch[/muted]     [warn]○[/warn] inactive — start with `yagura watch start`"
+            )
+    console.print()
+
+    # --- last alerts ---
+    log = LOG_DIR / "alerts.log"
+    if log.exists():
+        try:
+            tail = log.read_text(encoding="utf-8", errors="replace").splitlines()[-5:]
+        except OSError:
+            tail = []
+        if tail:
+            console.print("  [bold]last alerts[/bold] [muted](newest at bottom)[/muted]")
+            for line in tail:
+                console.print(f"  {line}")
+        else:
+            console.print("  [muted]last alerts[/muted]   none")
+    else:
+        console.print("  [muted]last alerts[/muted]   no alerts.log yet")
+    console.print()
+
+    # --- last scan ---
+    if LOG_DIR.exists():
+        reports = sorted(LOG_DIR.glob("report-*.md"))
+        if reports:
+            latest = reports[-1]
+            mtime = datetime.fromtimestamp(latest.stat().st_mtime, timezone.utc).isoformat(
+                timespec="seconds"
+            )
+            console.print(f"  [muted]last scan[/muted] {latest.name}  [muted]({mtime})[/muted]")
+        else:
+            console.print("  [muted]last scan[/muted] none — run `yagura scan`")
+    else:
+        console.print("  [muted]last scan[/muted] none — run `yagura scan`")
+
+    # --- AI provider ---
+    cfg = load_config()
+    ai_provider = get(cfg, "ai.provider", "none") or "none"
+    ai_key = get(cfg, "ai.api_key", "")
+    if ai_provider != "none" and ai_key:
+        console.print(f"  [muted]ai[/muted]        {ai_provider} · key configured")
+    else:
+        console.print("  [muted]ai[/muted]        [warn]none[/warn] — alerts go without AI analysis")
+
+    # --- baseline ---
+    b = baseline_mod.load()
+    if b is None:
+        console.print("  [muted]baseline[/muted]  [warn]none[/warn] — run `yagura watch start`")
+    else:
+        listeners = len(b.get("listeners", []))
+        units = len(b.get("systemd_units", []))
+        console.print(f"  [muted]baseline[/muted]  {listeners} listeners · {units} units")
+
+    console.print()
+    return 0
+
+
 COMMANDS = {
     "version": cmd_version,
     "scan": cmd_scan,
@@ -603,6 +739,7 @@ COMMANDS = {
     "report": cmd_report,
     "config": cmd_config,
     "uninstall": cmd_uninstall,
+    "health": cmd_health,
 }
 
 

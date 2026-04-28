@@ -180,18 +180,20 @@ def evaluate(baseline: dict, cfg: dict) -> list[Alert]:
             )
 
     # W-SVC-001: new enabled systemd unit
+    # yagura-* юниты — это сам watchdog, не надо алертить на собственный сервис.
     base_units = set(baseline.get("systemd_units", []))
     for u in svc_now.get("enabled_units", []):
-        if u not in base_units:
-            add(
-                Alert(
-                    rule_id="W-SVC-001",
-                    severity="HIGH",
-                    title="New enabled systemd unit",
-                    detail=u,
-                    context={"unit": u},
-                )
+        if u in base_units or u.startswith("yagura-"):
+            continue
+        add(
+            Alert(
+                rule_id="W-SVC-001",
+                severity="HIGH",
+                title="New enabled systemd unit",
+                detail=u,
+                context={"unit": u},
             )
+        )
 
     # W-USR-001: new UID 0
     base_uid_zero = set(baseline.get("uid_zero_users", []))
