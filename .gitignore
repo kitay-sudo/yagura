@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+docs/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# Yagura state (на машине разработчика)
+/etc/yagura/
+/var/lib/yagura/
+/var/log/yagura/
+baseline.json
+state.db
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+.claude/
+*.swp
+*.swo
+
+# Логи и временное
+*.log
+tmp/
+*.tmp
+*.bak
+
+# Тестовые артефакты
+.coverage
+coverage.xml
+htmlcov/

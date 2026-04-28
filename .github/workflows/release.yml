@@ -1,0 +1,105 @@
+# Release — собирает Python-пакет yagura и публикует GitHub Release.
+#
+# Триггер: push тега, начинающегося с `v` (например v0.1.0).
+#
+# Делает:
+#   1. собирает sdist + wheel из tool/ через python -m build
+#   2. имена артефактов: yagura-X.Y.Z.tar.gz, yagura-X.Y.Z-py3-none-any.whl
+#   3. SHA256SUMS.txt — для верификации
+#   4. публикует Release с автогенерируемыми notes (берёт из commits с прошлого тега)
+#
+# install.sh скачивает архив исходников из GitHub по тегу, не из этих артефактов —
+# артефакты в Release нужны для тех, кто ставит через pip.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # нужно для создания Release и upload assets
+
+jobs:
+  build:
+    name: build python package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build
+
+      - name: Build sdist + wheel
+        working-directory: tool
+        run: python -m build
+
+      - name: Move artifacts to dist/
+        run: |
+          mkdir -p dist
+          mv tool/dist/* dist/
+
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum yagura-* > SHA256SUMS.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # нужно для release-notes по полной истории
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.tar.gz
+            dist/*.whl
+            dist/SHA256SUMS.txt
+          body: |
+            ## Установка
+
+            ```bash
+            curl -sSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sudo bash
+            ```
+
+            Или через pip:
+
+            ```bash
+            pip install https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/yagura-${{ github.ref_name }}-py3-none-any.whl
+            ```
+
+            Проверка целостности — `SHA256SUMS.txt`.
+
+            ---

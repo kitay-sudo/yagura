@@ -1,0 +1,73 @@
+# CI — проверки на каждый push и PR.
+#
+# Что делает: ruff, pytest, build (только проверка что собирается). Никаких
+# артефактов и релизов не создаёт — это работа release.yml на тег v*.
+#
+# Цель: не дать смерджить/протегать сломанный код.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags-ignore: ["v*"] # релизные теги обрабатывает release.yml
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tool:
+    name: tool (Python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tool
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: tool/pyproject.toml
+
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: ruff
+        run: ruff check yagura tests
+
+      - name: pytest
+        run: pytest -q
+
+      - name: build sdist + wheel
+        run: |
+          pip install --upgrade build
+          python -m build
+
+  frontend:
+    name: frontend (Vite)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: build
+        run: npm run build

@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yagura"
+version = "0.1.0"
+description = "Yagura — security audit + behavioral watchdog for Linux servers (parent project to GORONIN)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "kitay-sudo" }]
+keywords = ["security", "audit", "linux", "watchdog", "telegram", "hardening"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: System :: Monitoring",
+]
+dependencies = [
+    "rich>=13.7",
+    "questionary>=2.0",
+    "psutil>=5.9",
+    "PyYAML>=6.0",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+ai-anthropic = ["anthropic>=0.25"]
+ai-openai = ["openai>=1.30"]
+ai-gemini = ["google-generativeai>=0.7"]
+ai = [
+    "anthropic>=0.25",
+    "openai>=1.30",
+    "google-generativeai>=0.7",
+]
+dev = [
+    "ruff>=0.5",
+    "black>=24.4",
+    "pytest>=8.0",
+]
+
+[project.scripts]
+yagura = "yagura.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/kitay-sudo/yagura"
+Repository = "https://github.com/kitay-sudo/yagura"
+Issues = "https://github.com/kitay-sudo/yagura/issues"
+
+[tool.setuptools.packages.find]
+include = ["yagura*"]
+exclude = ["tests*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
