@@ -28,6 +28,16 @@ REVERSE_SHELL_PROCESSES = {
 SUSPICIOUS_PROCESS_PATHS = ("/tmp/", "/dev/shm/", "/var/tmp/")
 CRYPTOMINER_CPU_THRESHOLD = 80.0
 
+# Yagura никогда не должна алертить на саму себя.
+# Имя процесса или префикс exe-пути — любое совпадение глушит W-NET-001.
+SELF_PROCESS_NAMES = {"yagura", "yagura-watch"}
+SELF_EXE_PREFIXES = ("/opt/yagura/", "/usr/local/bin/yagura", "/usr/bin/yagura")
+
+# Порты выше этого считаем эфемерными (Linux ip_local_port_range по умолчанию 32768–60999).
+# Для процессов из whitelist.processes такие порты не алертим — они почти всегда
+# клиентские/рандомные и спамят без пользы.
+EPHEMERAL_PORT_MIN = 32768
+
 
 @dataclass
 class Alert:
@@ -65,13 +75,26 @@ def evaluate(baseline: dict, cfg: dict) -> list[Alert]:
 
     # W-NET-001: new listener
     base_listeners = {(b["proto"], b["port"]) for b in baseline.get("listeners", [])}
+    # Процессы (по exe), у которых хоть один listener уже был в baseline —
+    # известные нам сервисы. На их эфемерных портах не шумим.
+    base_known_exes = {b.get("exe") for b in baseline.get("listeners", []) if b.get("exe")}
     for lst in net_now.get("listeners", []):
         key = (lst["proto"], lst["port"])
         if key in base_listeners:
             continue
+        if _is_self(lst):
+            continue
         if whitelist.is_port_whitelisted(cfg, lst["port"]):
             continue
         if whitelist.is_process_whitelisted(cfg, lst["exe"]):
+            continue
+        # Известный процесс на эфемерном порту — почти наверняка клиентский
+        # сокет, который psutil показал как LISTEN. Молчим.
+        if (
+            lst["port"] >= EPHEMERAL_PORT_MIN
+            and lst.get("exe")
+            and lst["exe"] in base_known_exes
+        ):
             continue
         add(
             Alert(
@@ -232,3 +255,11 @@ def _is_external(ip: str) -> bool:
     except ValueError:
         return False
     return not (addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_multicast)
+
+
+def _is_self(listener: dict) -> bool:
+    name = (listener.get("process") or "").lower()
+    exe = listener.get("exe") or ""
+    if name in SELF_PROCESS_NAMES:
+        return True
+    return any(exe.startswith(p) for p in SELF_EXE_PREFIXES)
