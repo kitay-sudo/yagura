@@ -31,8 +31,8 @@ import YaguraMark from '../components/landing/YaguraMark';
 import KanjiWatermark from '../components/landing/KanjiWatermark';
 import JapaneseDivider from '../components/landing/JapaneseDivider';
 
-const REPO_URL = 'https://gitlab.com/kitay-sudo/yagura';
-const INSTALL_CMD = 'curl -sSL https://gitlab.com/kitay-sudo/yagura/-/raw/main/install.sh | sudo bash';
+const REPO_URL = 'https://github.com/kitay-sudo/yagura';
+const INSTALL_CMD = 'curl -sSL https://raw.githubusercontent.com/kitay-sudo/yagura/main/install.sh | sudo bash';
 
 export default function Landing() {
   return (
@@ -117,7 +117,7 @@ function Nav() {
           className="text-sm font-medium bg-sky-500 hover:bg-sky-400 text-zinc-950 rounded-lg px-3.5 py-1.5 transition-colors flex items-center gap-1.5"
         >
           <Github size={14} />
-          GitLab
+          GitHub
         </a>
       </div>
     </header>
@@ -196,7 +196,7 @@ function Hero() {
               className="w-full sm:w-auto flex items-center justify-center gap-2 text-zinc-300 hover:text-zinc-100 border border-zinc-800 hover:border-zinc-700 rounded-xl px-5 py-3 transition-colors"
             >
               <Github size={16} />
-              Исходники на GitLab
+              Исходники на GitHub
             </a>
             <a
               href="#how"
@@ -573,7 +573,7 @@ function BehavioralRules() {
           <p className="mt-8 text-center text-xs text-zinc-500 max-w-xl mx-auto leading-relaxed">
             Полный список из 18+ scan-правил и 14+ watch-правил —{' '}
             <a href={REPO_URL} target="_blank" rel="noreferrer" className="text-sky-400 hover:text-sky-300">
-              в README на GitLab
+              в README на GitHub
             </a>.
           </p>
         </Reveal>
@@ -837,7 +837,7 @@ function FAQ() {
     },
     {
       q: 'Безопасно ли запускать curl | sudo bash?',
-      a: 'Скрипт короткий, читай его перед запуском: gitlab.com/<user>/yagura/-/blob/main/install.sh. Он только определяет дистрибутив, ставит Python если нет, скачивает Yagura и запускает интерактивный wizard. Никаких внешних серверов кроме gitlab.com.',
+      a: 'Скрипт короткий, читай его перед запуском: github.com/kitay-sudo/yagura/blob/main/install.sh. Он только определяет дистрибутив, ставит Python если нет, скачивает Yagura и запускает интерактивный wizard. Никаких внешних серверов кроме github.com.',
     },
     {
       q: 'Что watchdog делает с CPU?',
@@ -1102,7 +1102,7 @@ function CTA() {
               className="inline-flex items-center gap-2 text-zinc-300 hover:text-zinc-100 border border-zinc-800 hover:border-zinc-700 rounded-xl px-5 py-3 transition-colors"
             >
               <Github size={16} />
-              Посмотреть код на GitLab
+              Посмотреть код на GitHub
             </a>
           </div>
         </Reveal>
@@ -1119,7 +1119,7 @@ function Footer() {
           <span>YAGURA · MIT · © {new Date().getFullYear()}</span>
           <span className="text-zinc-700">·</span>
           <a
-            href="https://gitlab.com/kitay-sudo"
+            href="https://github.com/kitay-sudo"
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center gap-1 text-zinc-500 hover:text-sky-400 transition-colors"
@@ -1134,7 +1134,7 @@ function Footer() {
           <a href="#faq" className="hover:text-zinc-300 transition-colors">FAQ</a>
           <a href="#support" className="hover:text-zinc-300 transition-colors">Поддержать</a>
           <a href={REPO_URL} target="_blank" rel="noreferrer" className="hover:text-zinc-300 transition-colors flex items-center gap-1.5">
-            <Github size={14} /> GitLab
+            <Github size={14} /> GitHub
           </a>
         </div>
       </div>

@@ -31,7 +31,7 @@ def validate(bot_token: str) -> tuple[bool, str]:
 
 def send_test(bot_token: str, chat_id: str) -> tuple[bool, str]:
     text = (
-        f"🟦 YAGURA test message\n"
+        f"🍵 YAGURA test message\n"
         f"Host: {socket.gethostname()}\n"
         f"Time: {datetime.now().isoformat(timespec='seconds')}\n"
         f"\n"
@@ -59,7 +59,8 @@ def send_message(bot_token: str, chat_id: str, text: str) -> tuple[bool, str]:
 def send_alert(
     bot_token: str, chat_id: str, alert: Alert, ai_text: str | None = None
 ) -> tuple[bool, str]:
-    icon = {"CRITICAL": "🚨", "HIGH": "⚠️", "MEDIUM": "🔶", "LOW": "ℹ️"}.get(alert.severity, "•")
+    # Иконки по severity — единый стиль с goronin (парный проект).
+    icon = {"CRITICAL": "🥊", "HIGH": "🍑", "MEDIUM": "🍔", "LOW": "🥝"}.get(alert.severity, "🍔")
     host = socket.gethostname()
     lines = [
         f"{icon} YAGURA ALERT — {host}",

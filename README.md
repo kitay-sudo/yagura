@@ -18,16 +18,45 @@
 
 ## Установка
 
+### Публичный репозиторий
+
 ```bash
 curl -sSL https://raw.githubusercontent.com/kitay-sudo/yagura/main/install.sh | sudo bash
 ```
 
-Что произойдёт:
+### Приватный репозиторий (нужен `GITHUB_TOKEN`)
 
-1. Установится Python 3.10+ если его ещё нет.
-2. Создастся venv в `/opt/yagura/venv/`, скачается код, поставятся зависимости.
-3. Появится команда `yagura` в `/usr/local/bin/`.
-4. Запустится интерактивный мастер: AI-ключ (опционально) → scan → harden-меню → предложение поставить watchdog.
+Сейчас репо приватный — нужен PAT с правом `Contents: Read` на этот репозиторий:
+
+```bash
+export GITHUB_TOKEN=github_pat_xxxxx
+
+curl -sSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+  https://raw.githubusercontent.com/kitay-sudo/yagura/main/install.sh \
+  | sudo GITHUB_TOKEN="$GITHUB_TOKEN" bash
+```
+
+> `sudo GITHUB_TOKEN=...` обязательно — `sudo` по умолчанию сбрасывает env, и токен внутри скрипта пропадёт.
+
+### Что произойдёт
+
+**Свежая установка:**
+
+1. Поставится `python3` + `python3-venv` (если их нет на хосте).
+2. Создастся venv в `/opt/yagura/venv/`, скачается архив с GitHub, установятся зависимости.
+3. Зарегистрируется wrapper `/usr/local/bin/yagura`.
+4. Запустится интерактивный мастер: выбор AI-провайдера (опционально) → scan → меню harden → предложение запустить watchdog с Telegram-алертами.
+
+**Обновление** (если `/etc/yagura/config.yml` уже есть):
+
+1. `tool/` синхронизируется с новой версией.
+2. `yagura-watch.service` перезапускается с новым кодом — wizard **не запускается**, конфиг и baseline сохраняются.
+
+### Закрепить версию
+
+```bash
+YAGURA_VERSION=v0.5.0 curl -sSL ... | sudo YAGURA_VERSION=v0.5.0 GITHUB_TOKEN=... bash
+```
 
 > 📖 **Подробное объяснение для пользователей** — что приходит в Telegram, сколько стоит AI, как удалить — в [HOW_IT_WORKS.md](HOW_IT_WORKS.md).
 
@@ -63,6 +92,10 @@ curl -sSL https://raw.githubusercontent.com/kitay-sudo/yagura/main/install.sh | 
 
 ```bash
 yagura                       # полный wizard: scan + harden + watch offer
+yagura health                # компактный дашборд: watch, uptime, последние алерты, last scan, AI, baseline
+yagura help                  # алиас --help
+yagura version
+
 yagura scan                  # только аудит
 yagura scan --json           # JSON-вывод для скриптов
 yagura scan --report-only    # сохранить только markdown без интерактива
@@ -93,12 +126,13 @@ yagura report show 2026-04-28
 yagura config show           # текущий config.yml
 yagura config edit           # открыть в $EDITOR
 yagura config set ai.model claude-sonnet-4-6
+yagura config set watch.interval_minutes 1   # тест/отладка (default: 5)
 
 yagura uninstall             # откатить ВСЕ harden + удалить systemd-юнит + cleanup
-yagura version
 ```
 
 Все команды требуют root (читают `/etc/shadow`, дёргают `systemctl` и `iptables`).
+`yagura health` можно запускать без root — но без root не увидишь статус `yagura-watch.service` через `systemctl`.
 
 ---
 
@@ -180,7 +214,43 @@ Baseline в отдельном файле — `/var/lib/yagura/baseline.json`.
 | W-USR-001 | CRITICAL | Новый аккаунт с UID 0 |
 | W-USR-002 | HIGH | В `/etc/sudoers` или `sudoers.d/` добавлен новый юзер |
 
-Cooldown: один и тот же алерт подавляется на 1 час чтобы не спамить Telegram.
+**Самоисключения:** W-SVC-001 не алертит на собственные юниты с префиксом `yagura-` (напр. `yagura-watch.service`). AI-промпт для алертов знает про артефакты Yagura и помечает их как ложные срабатывания.
+
+**Cooldown:** один и тот же алерт подавляется на 1 час, чтобы не спамить Telegram.
+
+---
+
+## Smoke-test — убедиться что watchdog работает
+
+После `yagura watch start` нужно проверить что детект и Telegram-доставка реально работают. Самый простой тест — открыть «подозрительный» listener:
+
+```bash
+# 1. Свежий baseline — на нём НЕТ порта 8888
+sudo yagura baseline reset
+
+# 2. Уменьши интервал проверки до 1 минуты (по умолчанию 5)
+sudo yagura config set watch.interval_minutes 1
+sudo systemctl restart yagura-watch.service
+
+# 3. Открой listener в фоне
+nohup python3 -m http.server 8888 > /tmp/test-listener.log 2>&1 &
+echo "PID: $!"
+
+# 4. Жди ~1 минуту — в Telegram должен прийти алерт W-NET-001 (HIGH)
+sudo yagura watch logs   # увидишь tick в реальном времени
+
+# 5. Убей listener и верни интервал
+kill $!
+sudo yagura config set watch.interval_minutes 5
+sudo systemctl restart yagura-watch.service
+```
+
+Если алерт не пришёл за 2 минуты:
+- проверь `yagura health` — раздел `watch` должен быть `active (running)`
+- проверь `yagura config show` — `watch.telegram.bot_token` и `chat_id` непустые
+- проверь логи: `sudo yagura watch logs` — там должна быть строка `[INFO] tick: N alerts`
+
+Аналогично можно протестировать **W-CRON-001** (`(crontab -l; echo "* * * * * echo test") | crontab -`) или **W-USR-002** (новый юзер в sudoers с NOPASSWD).
 
 ---
 
@@ -198,18 +268,21 @@ Cooldown: один и тот же алерт подавляется на 1 ча�
 
 - Ubuntu 20.04+ / Debian 11+ / CentOS Stream 9 / Rocky Linux 9 / Arch (с systemd)
 - Ядро 3.10+ (используется только polling через `psutil`, без eBPF)
-- Python 3.10+
+- Python 3.10+ с пакетом `venv` (на Debian/Ubuntu это отдельный `pythonX.Y-venv`, install.sh ставит автоматически)
 
 Без systemd `scan` и `harden` работают, `watch start` выдаст предупреждение и не установит юнит.
+Команда `yagura health` на хостах без systemd показывает `watch: n/a` вместо статуса сервиса.
 
 ---
 
 ## Roadmap
 
-- v0.2: больше harden-actions (`PasswordPolicy`, `LoginDefs`, AppArmor profiles)
-- v0.3: опциональный eBPF-collector для real-time детекций
-- v0.4: web-dashboard (read-only, локальный) для просмотра истории алертов
-- v1.0: multi-server (один CLI собирает отчёты с N серверов через ssh)
+- больше harden-actions: `PasswordPolicy`, `LoginDefs`, AppArmor profiles
+- опциональный eBPF-collector для real-time детекций
+- web-dashboard (read-only, локальный) для просмотра истории алертов
+- multi-server: один CLI собирает отчёты с N серверов через ssh
+
+История изменений по версиям — в [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
