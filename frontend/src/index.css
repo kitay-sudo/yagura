@@ -20,3 +20,6 @@ html, body, #root {
 .animate-spin-slow {
   animation: spin-slow 1.2s linear infinite;
 }
+.animate-spin-roadmap {
+  animation: spin-slow 3s linear infinite;
+}
