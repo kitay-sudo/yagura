@@ -1193,6 +1193,17 @@ function CTA() {
 //   highlights — 2-4 буллита с самым важным; не нужно копировать весь CHANGELOG
 const CHANGELOG = [
   {
+    version: '0.12.0',
+    date: '2026-05-07',
+    title: 'Headless-browser tooling больше не шумит',
+    highlights: [
+      'Puppeteer/Playwright/Cypress/Electron больше не триггерят W-NET-001: подавляем listener только при совпадении exe в browser-tooling кеше И parent=node/python/pm2/electron',
+      'Сетевой коллектор теперь снимает ppid, parent_name, parent_cmdline, cwd — process tree доступен правилам и AI',
+      'AI-промпт для алертов получает явный блок process tree и инструкцию: "путь exe сам по себе не делает процесс подозрительным, смотри parent"',
+      'AnnouncementBar и TimewebCard на лендинге',
+    ],
+  },
+  {
     version: '0.11.0',
     date: '2026-04-28',
     title: 'Журнал изменений на лендинге и обновлённый логотип',

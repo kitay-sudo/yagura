@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-05-07
+
+### Changed
+
+- W-NET-001 больше не алертит на headless Chrome, порождённый легитимным app-рантаймом. Подавление требует одновременного совпадения двух признаков: exe в browser-tooling кеше (`~/.cache/{puppeteer,ms-playwright,Cypress}/`, `*/node_modules/{puppeteer,playwright,cypress,electron}/`) И parent_name в `{node, python, pm2, electron, npm, yarn, pnpm, bun}`. Решает шум на любом Node-проекте с PDF-генерацией или e2e-тестами без ручного whitelist'а.
+- Сетевой коллектор ([network.py](tool/yagura/collectors/network.py)) теперь возвращает `ppid`, `parent_name`, `parent_cmdline`, `cwd` для каждого listener и established-соединения. Поля inline в существующих структурах — никаких миграций baseline не требуется.
+- AI-вердикт для алертов получает отдельный блок `process tree:` (pid/user/exe/cwd/cmdline/ppid/parent) перед stringified-context'ом. Промпт явно инструктирует модель: путь exe сам по себе не делает процесс подозрительным, смотри parent process. Прекращает ложные вердикты вида «chrome из кеш-папки = компрометация».
+
+### Added
+
+- `AnnouncementBar` и `TimewebCard` на лендинге.
+
 ## [0.11.0] — 2026-04-28
 
 ### Added
