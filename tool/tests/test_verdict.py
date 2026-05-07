@@ -124,3 +124,34 @@ def test_static_fallback_critical_non_self():
 def test_static_fallback_high_non_self():
     v = verdict.static_fallback("W-NET-001", "HIGH", is_self=False)
     assert v.verdict == "unknown"
+
+
+def test_format_alert_context_emits_process_tree():
+    ctx = {
+        "listener": {
+            "pid": 2775254,
+            "user": "admingod",
+            "exe": "/home/admingod/.cache/puppeteer/chrome/linux-120/chrome",
+            "cwd": "/var/www/app",
+            "cmdline": "chrome --headless",
+            "ppid": 2766166,
+            "parent_name": "node",
+            "parent_cmdline": "node /var/www/app/server/index.js",
+        }
+    }
+    out = verdict.format_alert_context(ctx)
+    assert "process tree:" in out
+    assert "ppid=2766166" in out
+    assert "node" in out
+    assert "cwd: /var/www/app" in out
+
+
+def test_format_alert_context_skips_block_when_no_tree_data():
+    ctx = {"listener": {"pid": 1, "user": "root", "exe": "/usr/sbin/sshd"}}
+    out = verdict.format_alert_context(ctx)
+    assert "process tree:" not in out
+
+
+def test_format_alert_context_handles_empty():
+    assert verdict.format_alert_context({}) == ""
+    assert verdict.format_alert_context(None) == ""  # type: ignore[arg-type]

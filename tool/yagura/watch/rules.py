@@ -45,6 +45,36 @@ SELF_EXE_PREFIXES = ("/opt/yagura/", "/usr/local/bin/yagura", "/usr/bin/yagura")
 # клиентские/рандомные и спамят без пользы.
 EPHEMERAL_PORT_MIN = 32768
 
+# Headless-browser tooling — Puppeteer/Playwright/Cypress/Electron — устанавливает
+# Chromium в кеш-директории и поднимает локальный DevTools-порт на эфемерном порту.
+# Сама по себе chrome-в-кеш-папке выглядит подозрительно, но если её РОДИТЕЛЬ —
+# легитимный app-рантайм (node/python/pm2/electron), это стандартный паттерн PDF-
+# генерации, e2e-тестов, scraping'а. Подавляем W-NET-001 ТОЛЬКО при совпадении
+# обоих признаков: путь exe + имя родителя.
+BROWSER_TOOLING_PATH_MARKERS = (
+    "/.cache/puppeteer/",
+    "/.cache/ms-playwright/",
+    "/.cache/Cypress/",
+    "/node_modules/puppeteer",
+    "/node_modules/playwright",
+    "/node_modules/@playwright/",
+    "/node_modules/electron/",
+    "/node_modules/cypress/",
+)
+BROWSER_TOOLING_PARENT_NAMES = {
+    "node",
+    "nodejs",
+    "pm2",
+    "pm2-runtime",
+    "python",
+    "python3",
+    "electron",
+    "yarn",
+    "npm",
+    "pnpm",
+    "bun",
+}
+
 
 @dataclass
 class Alert:
@@ -102,6 +132,11 @@ def evaluate(baseline: dict, cfg: dict) -> list[Alert]:
             and lst.get("exe")
             and lst["exe"] in base_known_exes
         ):
+            continue
+        # Headless browser, порождённый легитимным app-рантаймом (Puppeteer/
+        # Playwright/Cypress/Electron). Универсальный паттерн для любого Node-
+        # проекта с PDF-генерацией или e2e-тестами.
+        if _is_browser_tooling_child(lst):
             continue
         add(
             Alert(
@@ -318,6 +353,27 @@ def _is_self(listener: dict) -> bool:
     if name in SELF_PROCESS_NAMES:
         return True
     return any(exe.startswith(p) for p in SELF_EXE_PREFIXES)
+
+
+def _is_browser_tooling_child(listener: dict) -> bool:
+    """True if the listener is a headless browser launched by a legit app runtime.
+
+    Требует совпадения ОБОИХ признаков:
+      1. exe находится в типичной browser-tooling кеш-директории
+         (~/.cache/puppeteer/, node_modules/playwright/, и т.п.)
+      2. parent process — node/python/pm2/electron/etc.
+
+    Атакующий, который положит свой бинарь в `~/.cache/puppeteer/`, не пройдёт
+    мимо проверки, если его родитель не node-подобный рантайм. И наоборот:
+    дочерний процесс под node, но запускаемый из `/tmp/`, по-прежнему алертит.
+    """
+    exe = listener.get("exe") or ""
+    parent_name = (listener.get("parent_name") or "").lower()
+    if not exe or not parent_name:
+        return False
+    if not any(marker in exe for marker in BROWSER_TOOLING_PATH_MARKERS):
+        return False
+    return parent_name in BROWSER_TOOLING_PARENT_NAMES
 
 
 def _is_local_db_conn(conn: dict) -> bool:

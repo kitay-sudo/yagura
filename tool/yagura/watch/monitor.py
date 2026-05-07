@@ -12,6 +12,7 @@ from yagura.ai.factory import build_client
 from yagura.ai.verdict import (
     AlertVerdict,
     build_alert_verdict_prompt,
+    format_alert_context,
     get_verdict_with_retry,
     static_fallback,
 )
@@ -270,7 +271,7 @@ def _make_verdict(a, ai) -> AlertVerdict | None:
         rule_name=a.title,
         severity=a.severity,
         details=a.detail,
-        context=str(a.context)[:1500],
+        context=format_alert_context(a.context, max_len=1500),
     )
     v = get_verdict_with_retry(ai, prompt)
     if v is None:

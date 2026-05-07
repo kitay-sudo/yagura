@@ -42,6 +42,13 @@ ALERT_VERDICT_PROMPT = """Ты — security-аналитик, мониториш
 Юниты systemd с префиксом `yagura-` — это сама Yagura. Если алерт про них,
 verdict = "legit_self".
 
+ВАЖНО: путь exe сам по себе не делает процесс подозрительным. Headless Chrome
+из ~/.cache/puppeteer/, ~/.cache/ms-playwright/ или из node_modules/{{puppeteer,
+playwright,cypress}}/ — стандартный паттерн для Node.js-проектов с PDF-генерацией
+или e2e-тестами. Электрон-приложения ставят свой Chromium тем же способом.
+Перед вердиктом смотри parent process: если родитель — node/python/pm2/electron,
+дочерний chrome/chromium из его кеша почти наверняка легитимен.
+
 СОБЫТИЕ
 rule_id: {rule_id}
 title: {rule_name}
@@ -117,6 +124,47 @@ def build_alert_verdict_prompt(
         details=details,
         context=context,
     )
+
+
+def format_alert_context(context: dict, max_len: int = 1500) -> str:
+    """Render alert context as a compact, human-readable block.
+
+    Process tree (ppid / parent / cwd) is pulled into its own clearly-labelled
+    section so the model doesn't miss it inside a stringified dict. The rest is
+    appended as `key: value` lines, truncated to `max_len`.
+    """
+    if not isinstance(context, dict) or not context:
+        return ""
+    proc_block = ""
+    for nested_key in ("listener", "connection", "process"):
+        nested = context.get(nested_key)
+        if isinstance(nested, dict) and (
+            nested.get("ppid") or nested.get("parent_name") or nested.get("cwd")
+        ):
+            lines = ["process tree:"]
+            if nested.get("pid"):
+                lines.append(f"  pid: {nested['pid']}")
+            if nested.get("user"):
+                lines.append(f"  user: {nested['user']}")
+            if nested.get("exe"):
+                lines.append(f"  exe: {nested['exe']}")
+            if nested.get("cwd"):
+                lines.append(f"  cwd: {nested['cwd']}")
+            if nested.get("cmdline"):
+                lines.append(f"  cmdline: {nested['cmdline']}")
+            ppid = nested.get("ppid") or 0
+            parent_name = nested.get("parent_name") or ""
+            parent_cmdline = nested.get("parent_cmdline") or ""
+            if ppid or parent_name:
+                parent_desc = parent_name or "?"
+                if parent_cmdline and parent_cmdline != parent_name:
+                    parent_desc = f"{parent_name} ({parent_cmdline})" if parent_name else parent_cmdline
+                lines.append(f"  parent: ppid={ppid} {parent_desc}")
+            proc_block = "\n".join(lines) + "\n"
+            break
+    rest = str(context)
+    out = (proc_block + rest) if proc_block else rest
+    return out[:max_len]
 
 
 def parse_verdict(text: str) -> AlertVerdict | None:

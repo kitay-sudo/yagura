@@ -41,6 +41,10 @@ def _listeners() -> list[dict]:
                 "exe": proc["exe"],
                 "user": proc["user"],
                 "cmdline": proc["cmdline"],
+                "cwd": proc["cwd"],
+                "ppid": proc["ppid"],
+                "parent_name": proc["parent_name"],
+                "parent_cmdline": proc["parent_cmdline"],
                 "suspicious_path": _is_suspicious_path(proc["exe"]),
             }
         )
@@ -95,19 +99,50 @@ def _interfaces() -> list[dict]:
     return out
 
 
+_EMPTY_PROC_INFO = {
+    "name": "",
+    "exe": "",
+    "user": "",
+    "cmdline": "",
+    "cwd": "",
+    "ppid": 0,
+    "parent_name": "",
+    "parent_cmdline": "",
+}
+
+
 def _process_info(pid: int | None) -> dict:
     if not pid:
-        return {"name": "", "exe": "", "user": "", "cmdline": ""}
+        return dict(_EMPTY_PROC_INFO)
     try:
         p = psutil.Process(pid)
-        return {
+        info = {
             "name": p.name(),
             "exe": p.exe(),
             "user": p.username(),
             "cmdline": " ".join(p.cmdline()),
+            "cwd": _safe(p.cwd),
+            "ppid": p.ppid(),
+            "parent_name": "",
+            "parent_cmdline": "",
         }
     except (psutil.NoSuchProcess, psutil.AccessDenied, FileNotFoundError):
-        return {"name": "", "exe": "", "user": "", "cmdline": ""}
+        return dict(_EMPTY_PROC_INFO)
+    if info["ppid"]:
+        try:
+            parent = psutil.Process(info["ppid"])
+            info["parent_name"] = parent.name()
+            info["parent_cmdline"] = " ".join(parent.cmdline())
+        except (psutil.NoSuchProcess, psutil.AccessDenied, FileNotFoundError):
+            pass
+    return info
+
+
+def _safe(fn) -> str:
+    try:
+        return fn() or ""
+    except (psutil.NoSuchProcess, psutil.AccessDenied, FileNotFoundError, OSError):
+        return ""
 
 
 def _is_suspicious_path(exe: str) -> bool:

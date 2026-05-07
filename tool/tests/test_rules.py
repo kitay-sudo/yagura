@@ -572,6 +572,89 @@ def test_proc002_cmdline_whitelist_suppresses(monkeypatch):
     assert not [a for a in alerts if a.rule_id == "W-PROC-002"]
 
 
+def test_browser_tooling_child_of_node_is_silent(monkeypatch):
+    # Headless Chrome под ~/.cache/puppeteer/ с родителем node — стандартный
+    # паттерн PDF-генерации в Node-приложении. W-NET-001 не должен алертить.
+    base = _baseline()
+    _stub_collectors(
+        monkeypatch,
+        listeners=[
+            {
+                "port": 45971,
+                "proto": "tcp",
+                "ip": "127.0.0.1",
+                "pid": 2775254,
+                "process": "chrome",
+                "exe": "/home/admingod/.cache/puppeteer/chrome/linux-120/chrome-linux64/chrome",
+                "user": "admingod",
+                "cmdline": "/home/admingod/.cache/puppeteer/chrome/linux-120/chrome-linux64/chrome --headless",
+                "cwd": "/var/www/app",
+                "ppid": 2766166,
+                "parent_name": "node",
+                "parent_cmdline": "node /var/www/app/server/index.js",
+                "suspicious_path": False,
+            }
+        ],
+    )
+    alerts = rules.evaluate(base, _empty_cfg())
+    assert "W-NET-001" not in [a.rule_id for a in alerts]
+
+
+def test_browser_tooling_path_without_legit_parent_still_alerts(monkeypatch):
+    # Тот же exe-путь, но parent — bash (а не node/python/electron).
+    # Это уже не Puppeteer-паттерн, должны алертить.
+    base = _baseline()
+    _stub_collectors(
+        monkeypatch,
+        listeners=[
+            {
+                "port": 45971,
+                "proto": "tcp",
+                "ip": "127.0.0.1",
+                "pid": 2775254,
+                "process": "chrome",
+                "exe": "/home/x/.cache/puppeteer/chrome/linux-120/chrome-linux64/chrome",
+                "user": "x",
+                "cmdline": "chrome --headless",
+                "cwd": "/tmp",
+                "ppid": 1,
+                "parent_name": "bash",
+                "parent_cmdline": "bash",
+                "suspicious_path": False,
+            }
+        ],
+    )
+    alerts = rules.evaluate(base, _empty_cfg())
+    assert "W-NET-001" in [a.rule_id for a in alerts]
+
+
+def test_legit_parent_without_tooling_path_still_alerts(monkeypatch):
+    # Родитель node, но exe — НЕ в browser-tooling кеше. Не должны подавлять.
+    base = _baseline()
+    _stub_collectors(
+        monkeypatch,
+        listeners=[
+            {
+                "port": 45971,
+                "proto": "tcp",
+                "ip": "0.0.0.0",
+                "pid": 2775254,
+                "process": "myproc",
+                "exe": "/tmp/myproc",
+                "user": "x",
+                "cmdline": "/tmp/myproc",
+                "cwd": "/tmp",
+                "ppid": 100,
+                "parent_name": "node",
+                "parent_cmdline": "node server.js",
+                "suspicious_path": True,
+            }
+        ],
+    )
+    alerts = rules.evaluate(base, _empty_cfg())
+    assert "W-NET-001" in [a.rule_id for a in alerts]
+
+
 def test_disabled_rule_is_skipped(monkeypatch):
     base = _baseline()
     cfg = _empty_cfg()
