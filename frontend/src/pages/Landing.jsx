@@ -22,6 +22,8 @@ import {
   Radar,
   Sparkles,
   History,
+  Server,
+  ArrowRight,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import GridBackground from '../components/landing/GridBackground';
@@ -32,6 +34,7 @@ import FAQItem from '../components/landing/FAQItem';
 import YaguraMark from '../components/landing/YaguraMark';
 import KanjiWatermark from '../components/landing/KanjiWatermark';
 import JapaneseDivider from '../components/landing/JapaneseDivider';
+import AnnouncementBar from '../components/landing/AnnouncementBar';
 
 const REPO_URL = 'https://github.com/kitay-sudo/yagura';
 const INSTALL_CMD = 'curl -sSL https://raw.githubusercontent.com/kitay-sudo/yagura/main/install.sh | sudo bash';
@@ -39,6 +42,7 @@ const INSTALL_CMD = 'curl -sSL https://raw.githubusercontent.com/kitay-sudo/yagu
 export default function Landing() {
   return (
     <div className="min-h-dvh bg-zinc-950 text-zinc-100 antialiased">
+      <AnnouncementBar />
       <Nav />
       <Hero />
       <YaguraStory />
@@ -939,6 +943,10 @@ function Support() {
           </div>
         </Reveal>
 
+        <Reveal delay={0.13}>
+          <TimewebCard />
+        </Reveal>
+
         <Reveal delay={0.15}>
           <div className="mt-10 rounded-2xl border border-sky-500/20 bg-gradient-to-br from-sky-500/5 via-zinc-900/40 to-zinc-900/40 p-6 md:p-8">
             <div className="flex items-start gap-4">
@@ -1037,6 +1045,65 @@ function DonorsWall({ donors }) {
           })}
         </ul>
       )}
+    </div>
+  );
+}
+
+function TimewebCard() {
+  return (
+    <div className="mt-10 rounded-2xl border border-sky-500/30 bg-gradient-to-br from-sky-500/10 via-zinc-900/60 to-zinc-900/40 p-6 md:p-7">
+      <div className="flex items-start gap-4">
+        <div className="shrink-0 inline-flex items-center justify-center w-12 h-12 rounded-xl border border-sky-500/40 bg-sky-500/10 text-sky-300">
+          <Server size={20} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap items-center gap-2 mb-1.5">
+            <h3 className="text-base md:text-lg font-semibold text-zinc-100">
+              VPS, который мы используем сами
+            </h3>
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded border border-zinc-700 bg-zinc-900/60 text-[10px] uppercase tracking-widest font-mono text-zinc-400">
+              ad
+            </span>
+          </div>
+          <p className="text-sm text-zinc-400 leading-relaxed">
+            <a
+              href="https://timeweb.cloud/?i=104289"
+              target="_blank"
+              rel="sponsored noopener"
+              className="text-sky-300 hover:text-sky-200 font-medium underline-offset-4 hover:underline"
+            >
+              Timeweb Cloud
+            </a>{' '}
+            — российский хостинг, на котором живут наши боевые сервера: быстрая
+            панель, NVMe-диски, развёртывание VPS за минуту, оплата картой и
+            крипто-кошельком. Ровно то, что нужно когда ты деплоишь свои сервисы
+            и хочешь чтобы Yagura следила за ними без задержек.
+          </p>
+          <p className="mt-3 text-sm text-zinc-400 leading-relaxed">
+            Берёшь сервер — могу{' '}
+            <span className="text-zinc-200">помочь с первичной настройкой</span>:
+            напиши в Telegram{' '}
+            <a
+              href="https://t.me/kitay9"
+              target="_blank"
+              rel="noreferrer"
+              className="text-sky-300 hover:text-sky-200 font-mono"
+            >
+              @kitay9
+            </a>{' '}
+            — подскажу с конфигом, файрволом, systemd, деплоем своих сервисов.
+          </p>
+          <a
+            href="https://timeweb.cloud/?i=104289"
+            target="_blank"
+            rel="sponsored noopener"
+            className="mt-5 inline-flex items-center gap-1.5 text-sm font-medium px-4 py-2 rounded-lg bg-sky-500 hover:bg-sky-400 text-zinc-950 transition-colors"
+          >
+            Перейти к Timeweb Cloud
+            <ArrowRight size={14} />
+          </a>
+        </div>
+      </div>
     </div>
   );
 }
